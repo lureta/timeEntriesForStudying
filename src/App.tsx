@@ -1,3 +1,5 @@
+import CategoryBreakdown from "./components/CategoryBreakdown";
+import HoursGoalChart from "./components/HoursGoalChart";
 import GoalProgress from "./components/GoalProgress";
 import CalendarSlots from "./components/CalendarSlots";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -26,9 +28,9 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
   ComposedChart,
   Line,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -382,7 +384,6 @@ export default function App() {
     loadCategoryColors,
   );
   const [view, setView] = useState<View>("timesheet");
-  const dailyChartRef = useRef<HTMLDivElement>(null);
   const [categoryRange, setCategoryRange] = useState<"day" | "week">("day");
   const [categoryDay, setCategoryDay] = useState(iso(new Date()));
   const [newGoalCategory, setNewGoalCategory] = useState("");
@@ -759,13 +760,6 @@ export default function App() {
   const categoryGoalPeriod = `${categoryRange}:${categoryRange === "day" ? categoryDay : iso(week)}`;
   const currentCategoryGoals = categoryGoals[categoryGoalPeriod] || {};
   const categoryEntries = categoryRange === "day" ? entries.filter((entry) => entry.date === categoryDay) : weekEntries;
-  const grouped = [...new Set([...categories, ...categoryEntries.map((entry) => entry.course)])].map((name, i) => ({
-    name,
-    color: categoryColors[name] || COLORS[i % COLORS.length],
-    value: categoryEntries
-      .filter((e) => e.course === name)
-      .reduce((sum, e) => sum + hours(e), 0),
-  })).filter((x) => x.value > 0);
   const progressData = days.map((day) => {
     const key = iso(day);
     const dailyHours = weekEntries
@@ -777,18 +771,12 @@ export default function App() {
       target: Number((goal / 7).toFixed(2)),
     };
   });
-  const hourlyProgress = Array.from({ length: 97 }, (_, index) => {
-    const minute = index * 15;
-    const value = categoryEntries.reduce((sum, entry) => sum + Math.max(0,
-      Math.min(minutes(entry.end), minute) - minutes(entry.start)) / 60, 0);
-    return { day: minute === 1440 ? "Midnight" : new Date(2000, 0, 1, Math.floor(minute / 60), minute % 60).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }), actual: Number(value.toFixed(3)) };
-  });
-  const weeklyHistory = Array.from({ length: 6 }, (_, index) => {
-    const start = new Date(week); start.setDate(start.getDate() - (5 - index) * 7);
-    const end = new Date(start); end.setDate(end.getDate() + 6);
-    const value = entries.filter((entry) => entry.date >= iso(start) && entry.date <= iso(end)).reduce((sum, entry) => sum + hours(entry), 0);
-    return { week: start.toLocaleDateString("en-US", { month: "short", day: "numeric" }), hours: Number(value.toFixed(3)) };
-  });
+  const categoryBreakdown = [...new Set(categoryEntries.map((entry) => entry.course))].map((name) => ({
+    name, hours: categoryEntries.filter((entry) => entry.course === name).reduce((sum, entry) => sum + hours(entry), 0),
+    color: categoryColors[name] || COLORS[Math.max(0, categories.indexOf(name)) % COLORS.length],
+  })).filter((category) => category.hours > 0).sort((a, b) => b.hours - a.hours);
+  const dailyHoursTotal = categoryEntries.reduce((sum, entry) => sum + hours(entry), 0);
+  const dailyChartData = [{ day: dateFrom(categoryDay).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }), hours: Number(dailyHoursTotal.toFixed(3)) }];
   const moveWeek = (delta: number) =>
     setWeek((w) => {
       const d = new Date(w);
@@ -1638,46 +1626,6 @@ export default function App() {
                   }}><ChevronRight size={16} /></button>
                 </div>
         </div>}
-        {view === "analytics" && <section className={`stats ${categoryRange === "day" ? "analytics-daily-stats" : ""}`}>
-          <div className="stat">
-            <span>{categoryRange === "day" ? "HOURS THIS DAY" : "HOURS THIS WEEK"}</span>
-            <strong>{formatHours(categoryEntries.reduce((sum, entry) => sum + hours(entry), 0))}</strong>
-            <small>Recorded study time</small>
-          </div>
-          <div className="stat">
-            <span>STUDY SESSIONS</span>
-            <strong>{categoryEntries.length}</strong>
-            <small>
-              {categoryEntries.filter((entry) => entry.status !== "submitted").length} drafts in this period
-            </small>
-          </div>
-          {categoryRange === "day" && <div className="stat"><GoalProgress key={categoryDay} label="DAILY GOAL" target={dailyGoals[categoryDay] || 0}
-            actual={categoryEntries.reduce((sum, entry) => sum + hours(entry), 0)} max={24}
-            onSave={(value) => setDailyGoals((current) => ({ ...current, [categoryDay]: value }))} /></div>}
-          {categoryRange === "week" && <div className="stat weekly-goal-stat">
-            <div className="weekly-goal-stat-heading"><span>WEEKLY GOAL</span>
-              {!editingGoal && <button type="button" className="icon-button" aria-label="Edit weekly goal" onClick={() => { setGoalInput(String(goal)); setEditingGoal(true); }}><Pencil size={14} /></button>}
-            </div>
-            {editingGoal ? <form className="weekly-goal-edit inline-goal-edit" onSubmit={(event) => {
-                  event.preventDefault(); const value = Number(goalInput);
-                  if (!Number.isInteger(value) || value < 1 || value > 200) { setGoalError("Enter a whole number from 1 to 200 hours."); return; }
-                  setGoal(value); setGoalInput(String(value)); setEditingGoal(false); setGoalError("");
-                }}>
-                  <div className="goal-input-wrap">
-                    <input id="goal-input" aria-label="Weekly goal hours" type="number" min="1" max="200" step="1" required autoFocus value={goalInput} onChange={(event) => setGoalInput(event.target.value)} /><span className="goal-unit">h</span>
-                    <button className="primary small" type="submit">Save goal</button>
-                    <button className="secondary small" type="button" onClick={() => { setEditingGoal(false); setGoalInput(String(goal)); setGoalError(""); }}>Cancel</button>
-                  </div>
-                  {goalError && <p className="error" role="alert">{goalError}</p>}
-                </form> : <button className="goal-number-button" type="button" aria-label={`Edit weekly goal, currently ${goal} hours`} onClick={() => { setGoalInput(String(goal)); setEditingGoal(true); }}>{goal}h</button>}
-            <span className="weekly-goal-percent">{Math.round((total / Math.max(goal, 1)) * 100)}% complete</span>
-            <div className="progress" role="progressbar" aria-label="Weekly goal completion" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Math.round(total / Math.max(goal, 1) * 100))}>
-              <div style={{ width: `${Math.min(100, total / Math.max(goal, 1) * 100)}%`, background: "var(--primary)" }} />
-            </div>
-            <small>{formatHours(total)} studied · {formatHours(Math.max(0, goal - total))} remaining</small>
-
-          </div>}
-        </section>}
         {view === "timesheet" && (
           <>
             <div className="schedule-layout">
@@ -1968,46 +1916,35 @@ export default function App() {
           }} />
         </div>
         {view === "analytics" && (
-          <div className="analytics-grid">
+          <div className="analytics-grid day-analytics">
 
-            <section className="panel progress-chart-panel">
-              <div className="panel-heading">
-                <div>
-                  <h2>{categoryRange === "day" ? "Daily cumulative progress" : "Study hours by day"}</h2>
-                  <p>{categoryRange === "day" ? "Recorded study hours add up throughout the day" : "Daily totals compared with your weekly goal’s daily pace"}</p>
-                </div>
-                <ChartColumn size={20} />
+            <section className="panel daily-goal-unified" aria-label={categoryRange === "day" ? "Daily study progress" : "Weekly study progress"}>
+              <div className="daily-goal-card-heading"><h2>{categoryRange === "day" ? "Daily study progress" : "Weekly study progress"}</h2>
+                <p>{categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : `${days[0].toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${days[6].toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`}</p></div>
+              <div className="daily-goal-summary">
+                <GoalProgress key={`${categoryRange}:${categoryDay}`} compact label={categoryRange === "day" ? "Daily goal" : "Weekly goal"}
+                  target={categoryRange === "day" ? dailyGoals[categoryDay] || 0 : goal} actual={dailyHoursTotal} max={categoryRange === "day" ? 24 : 200}
+                  onSave={(value) => { if (categoryRange === "day") setDailyGoals((current) => ({ ...current, [categoryDay]: value })); else { setGoal(value); setGoalInput(String(value)); } }} />
               </div>
-              <div ref={dailyChartRef} className={categoryRange === "day" ? "daily-chart-scroll" : ""} tabIndex={categoryRange === "day" ? 0 : undefined} aria-label={categoryRange === "day" ? "Scrollable cumulative daily study progress" : undefined}>
-              <div className={`chart-frame ${categoryRange === "day" ? "daily-chart-wide" : ""}`}>
-                <ResponsiveContainer width="100%" height={280}>
-                  <ComposedChart data={categoryRange === "day" ? hourlyProgress : progressData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
-                    <CartesianGrid stroke="#e8ede9" strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="day" tickLine={false} axisLine={false} />
-                    <YAxis tickLine={false} axisLine={false} width={34} />
-                    <Tooltip formatter={(value) => `${Number(value).toFixed(1)}h`} />
-                    {categoryRange === "day" ? <Line type="linear" dataKey="actual" name="Total study hours" stroke={chartColor} strokeWidth={3} dot={false} activeDot={{ r: 4 }} /> : <Bar dataKey="actual" name="Study hours" fill={chartColor} radius={[4, 4, 0, 0]} />}
-                    {categoryRange === "week" && <Line type="monotone" dataKey="target" name="Average daily pace" stroke={chartGoalColor} strokeWidth={2} strokeDasharray="5 5" dot={false} />}
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-              </div>
-              {categoryRange === "day" && dailyGoals[categoryDay] > 0 && <p className="helper daily-goal-caption">
-                {formatHours(categoryEntries.reduce((sum, entry) => sum + hours(entry), 0))} of {dailyGoals[categoryDay]}h daily goal · {Math.round(categoryEntries.reduce((sum, entry) => sum + hours(entry), 0) / dailyGoals[categoryDay] * 100)}% complete
-              </p>}
-              {categoryRange === "day" && <div className="daily-chart-navigation">
-                <span>Scroll to see all hours</span>
-                <button className="secondary small" type="button" aria-label="Show earlier hours" onClick={() => dailyChartRef.current?.scrollBy({ left: -320, behavior: "smooth" })}><ChevronLeft size={15} /></button>
-                <button className="secondary small" type="button" aria-label="Show later hours" onClick={() => dailyChartRef.current?.scrollBy({ left: 320, behavior: "smooth" })}><ChevronRight size={15} /></button>
-              </div>}
-              <div className="chart-key">
-                <span><i className="key-actual" style={{ background: chartColor }} /> Study hours</span>
-                {categoryRange === "week" && <span><i className="key-target" style={{ background: chartGoalColor }} /> Average daily pace</span>}
-              </div>
+              <div className="daily-goal-ring-area"><HoursGoalChart label={categoryRange === "day" ? "Daily progress" : "Weekly progress"} actual={dailyHoursTotal} goal={categoryRange === "day" ? dailyGoals[categoryDay] || 0 : goal} color={chartColor} height={240} showCaption={false} /></div>
             </section>
+            {categoryRange === "week" && <section className="panel progress-chart-panel">
+              <div className="panel-heading"><div><h2>Study hours by day</h2><p>Daily totals compared with your weekly goal’s daily pace</p></div><ChartColumn size={20} /></div>
+              <div className="chart-frame"><ResponsiveContainer width="100%" height={280}>
+                <ComposedChart data={progressData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+                  <CartesianGrid stroke="#e8ede9" strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="day" tickLine={false} axisLine={false} /><YAxis tickLine={false} axisLine={false} width={34} />
+                  <Tooltip formatter={(value) => `${Number(value).toFixed(1)}h`} />
+                  <Bar dataKey="actual" name="Study hours" fill={chartColor} radius={[4, 4, 0, 0]} />
+                  <Line type="monotone" dataKey="target" name="Average daily pace" stroke={chartGoalColor} strokeWidth={2} strokeDasharray="5 5" dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer></div>
+              <div className="chart-key"><span><i style={{ background: chartColor }} /> Study hours</span><span><i style={{ background: chartGoalColor }} /> Average daily pace</span></div>
+            </section>}
             <div className="analytics-side">
+              <CategoryBreakdown categories={categoryBreakdown} period={categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString() : `the week of ${dateFrom(iso(week)).toLocaleDateString()}`} />
               <section className="panel category-goals-panel">
-          <div className="panel-heading"><div><h2>{categoryRange === "day" ? "Daily category goals" : "Weekly category goals"}</h2>
+          <div className="panel-heading"><div><h2>{categoryRange === "day" ? "Categories studied today" : "Categories studied this week"}</h2>
             <p>Set hours for each category for {categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString() : `the week of ${dateFrom(iso(week)).toLocaleDateString()}`}. Daily and weekly targets are saved separately.</p></div></div>
           <form className="category-goal-add" onSubmit={(event) => {
             event.preventDefault(); const value = Number(newCategoryGoalHours);
@@ -2024,57 +1961,24 @@ export default function App() {
             <button className="primary small" type="submit"><Plus size={14} /> Add category goal</button>
           </form>
           {categoryGoalError && <p className="error" role="alert">{categoryGoalError}</p>}
-          {!Object.keys(currentCategoryGoals).length && <p className="helper">Add only the categories you want to focus on for this {categoryRange}.</p>}
-          <div className="category-goals-grid">{Object.entries(currentCategoryGoals).map(([category, target]) => {
+          {!categoryEntries.length && !Object.keys(currentCategoryGoals).length && <p className="helper">Your categories will appear here when you log study time. You can also add a category goal above.</p>}
+          <div className="category-goals-grid">{[...new Set([...categoryEntries.map((entry) => entry.course), ...Object.keys(currentCategoryGoals)])].map((category) => {
+            const target = currentCategoryGoals[category] || 0;
             const actual = categoryEntries.filter((entry) => entry.course === category).reduce((sum, entry) => sum + hours(entry), 0);
-            return <div className="category-goal-card" key={`${categoryGoalPeriod}:${category}`}><GoalProgress label={category} target={target} actual={actual} max={categoryRange === "day" ? 24 : 168}
+            return <div className="category-goal-card" key={`${categoryGoalPeriod}:${category}`}><GoalProgress horizontal periodTotal={categoryEntries.reduce((sum, entry) => sum + hours(entry), 0)} chartMax={Math.max(1, ...Object.values(currentCategoryGoals), ...[...new Set(categoryEntries.map((entry) => entry.course))].map((name) => categoryEntries.filter((entry) => entry.course === name).reduce((sum, entry) => sum + hours(entry), 0)))} color={categoryColors[category] || COLORS[Math.max(0, categories.indexOf(category)) % COLORS.length]} label={category} target={target} actual={actual} max={categoryRange === "day" ? 24 : 168}
               onSave={(value) => setCategoryGoals((current) => ({ ...current, [categoryGoalPeriod]: { ...current[categoryGoalPeriod], [category]: value } }))} />
-              <button className="secondary small" type="button" aria-label={`Remove ${category} goal`} onClick={() => setCategoryGoals((current) => {
+              {target > 0 && <button className="secondary small" type="button" aria-label={`Remove ${category} goal`} onClick={() => setCategoryGoals((current) => {
                 const updated = { ...current[categoryGoalPeriod] }; delete updated[category]; return { ...current, [categoryGoalPeriod]: updated };
-              })}>Remove goal</button>
+              })}>Remove goal</button>}
             </div>;
           })}</div>
         </section>
-              <section className="panel category-chart-panel">
-                <div className="panel-heading">
-                  <div>
-                    <h2>Hours by category</h2>
-                    <p>{categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : `${days[0].toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${days[6].toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`}</p>
-                  </div>
-                </div>
-                {grouped.length === 0 ? (
-                  <p className="empty">No study time recorded {categoryRange === "day" ? "on this day" : "this week"}.</p>
-                ) : (
-                  <div className="category-chart-frame">
-                    <ResponsiveContainer width="100%" height={Math.max(190, grouped.length * 40)}>
-                      <BarChart data={grouped} layout="vertical" margin={{ top: 4, right: 12, bottom: 4, left: 4 }}>
-                        <CartesianGrid stroke="#e8ede9" horizontal={false} />
-                        <XAxis type="number" tickLine={false} axisLine={false} />
-                        <YAxis type="category" dataKey="name" tickLine={false} axisLine={false} width={100} />
-                        <Tooltip formatter={(value) => `${Number(value).toFixed(1)}h`} />
-                        <Bar dataKey="value" name="Study hours" radius={[0, 4, 4, 0]}>
-                          {grouped.map((item) => <Cell key={item.name} fill={item.color} />)}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </section>
+
 
             </div>
           </div>
         )}
-        {view === "analytics" && categoryRange === "week" && <section className="panel weekly-history-panel">
-          <div className="panel-heading"><div><h2>Week by week</h2><p>Six weeks of study time, ending with the selected week</p></div></div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={weeklyHistory} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
-              <CartesianGrid stroke="#e8ede9" vertical={false} strokeDasharray="3 3" />
-              <XAxis dataKey="week" tickLine={false} axisLine={false} /><YAxis width={34} tickLine={false} axisLine={false} />
-              <Tooltip formatter={(value) => `${Number(value).toFixed(1)}h`} />
-              <Bar dataKey="hours" name="Study hours" fill={chartColor} radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </section>}
+
         {view === "tasks" && <StudyTasks key={authUser?.id || "local"} data={taskData} setData={setTaskData} />}
         {view === "appearance" && <section className="panel appearance-page" aria-label="Appearance settings">
             <fieldset className="theme-fieldset">

@@ -1326,3 +1326,122 @@ footer span {
 
 .daily-chart-navigation { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .daily-chart-navigation > span { margin-right: auto; font-size: 10px; color: #637087; }
+
+.analytics-grid.day-analytics { grid-template-columns: minmax(0, 1fr); }
+.daily-goal-overview > h2 { font-size: 18px; margin: 0 0 20px; }
+.goal-progress-horizontal { display: grid; grid-template-columns: minmax(150px, .65fr) minmax(0, 1.5fr); align-items: center; gap: 30px; }
+.goal-chart-labels { display: flex; justify-content: space-between; gap: 12px; color: #637087; font-size: 11px; }
+.goal-chart-track { height: 24px; background: color-mix(in srgb, var(--primary) 12%, white); border-radius: 5px; margin: 10px 0; overflow: hidden; }
+.goal-chart-track > div { height: 100%; background: var(--primary); border-radius: 5px; transition: width .2s ease; }
+.category-goals-grid { grid-template-columns: minmax(0, 1fr); }
+.day-analytics .analytics-side { grid-template-columns: minmax(0, 1fr); }
+.stats.analytics-daily-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 650px) { .goal-progress-horizontal { grid-template-columns: 1fr; gap: 16px; } }
+
+.daily-goal-chart-layout { display: grid; grid-template-columns: minmax(150px, .45fr) minmax(0, 1.55fr); align-items: center; gap: 28px; }
+.daily-goal-line-chart { min-width: 0; }
+.daily-goal-chart-layout .goal-progress-number { font-size: 36px; }
+.daily-goal-chart-layout .goal-progress-details > small { display: block; font-size: 13px; margin-top: 8px; color: #637087; }
+@media (max-width: 650px) { .daily-goal-chart-layout { grid-template-columns: 1fr; gap: 16px; } }
+
+.daily-split-cards { grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); align-items: stretch; gap: 20px; }
+.daily-goal-square { aspect-ratio: 1; display: flex; align-items: center; }
+.daily-goal-square > .goal-progress-item { width: 100%; }
+.daily-split-cards .daily-goal-line-chart { display: flex; align-items: center; }
+@media (max-width: 650px) { .daily-split-cards { grid-template-columns: 1fr; } .daily-goal-square { aspect-ratio: auto; min-height: 180px; } }
+
+.hours-goal-chart { min-width: 0; width: 100%; }
+
+.goal-of-label { font-size: .6em; font-weight: 500; color: #637087; }
+.goal-progress-details > small { display: block; color: #637087; font-size: 12px; line-height: 1.6; }
+
+.study-progress-ring { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; width: 100%; color: #263247; }
+.study-ring-visual { position: relative; width: clamp(120px, 80%, 200px); aspect-ratio: 1; }
+.study-ring-visual svg { display: block; width: 100%; height: 100%; }
+.study-ring-visual circle { transition: stroke-dashoffset .3s ease; }
+.study-ring-value { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 4px; }
+.study-ring-value strong { font-size: clamp(24px, 3vw, 38px); line-height: 1; font-variant-numeric: tabular-nums; }
+.study-ring-value strong small { font-size: .5em; margin-left: 2px; font-weight: 500; }
+.study-ring-value > span, .study-ring-caption { font-size: 11px; color: #637087; }
+.goal-progress-horizontal .study-ring-visual { width: 120px; }
+.goal-progress-horizontal .study-ring-value strong { font-size: 25px; }
+.daily-split-cards .study-ring-visual { width: 200px; }
+
+.study-ring-balanced { gap: 8px; }
+.study-ring-balanced > div { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.study-ring-balanced > div > span { font-size: 9px; color: #637087; }
+.study-ring-balanced > div > strong { font-size: 25px; font-weight: 700; }
+.goal-progress-horizontal .study-ring-balanced > div > strong { font-size: 19px; }
+.goal-progress-horizontal .study-ring-balanced { gap: 4px; }
+.goal-of-label { font-size: 1em; color: inherit; font-weight: inherit; }
+.category-breakdown-layout { display: grid; grid-template-columns: minmax(200px, .8fr) minmax(0, 1fr); align-items: center; gap: 24px; }
+.category-breakdown-ring { position: relative; min-width: 0; }
+.category-breakdown-total { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 6px; align-items: center; justify-content: center; pointer-events: none; }
+.category-breakdown-total strong { font-size: 30px; color: #263247; }
+.category-breakdown-total span { font-size: 11px; color: #637087; }
+.category-breakdown-legend { list-style: none; margin: 0; padding: 0; }
+.category-breakdown-legend li { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto 38px; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid #edf0f5; font-size: 12px; }
+.category-breakdown-legend i { width: 10px; height: 10px; border-radius: 3px; }
+.category-breakdown-legend li > span { overflow-wrap: anywhere; }
+.category-breakdown-legend small { text-align: right; color: #637087; }
+@media (max-width: 700px) { .category-breakdown-layout { grid-template-columns: 1fr; gap: 12px; } }
+
+.daily-goal-unified { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, .65fr); align-items: center; gap: 28px; padding: 28px 36px; background: linear-gradient(110deg, white 45%, color-mix(in srgb, var(--primary) 5%, white)); }
+.daily-goal-summary { max-width: 440px; }
+.daily-goal-summary .goal-progress-heading { font-size: 14px; font-weight: 650; color: #263247; }
+.daily-goal-summary .goal-progress-number { margin: 20px 0 12px; font-size: clamp(28px, 3.5vw, 42px); letter-spacing: -1px; }
+.daily-goal-summary .goal-progress-details > small { font-size: 13px; }
+.daily-goal-ring-area { min-width: 0; }
+.daily-goal-ring-area .study-ring-visual { width: 210px; }
+.daily-goal-ring-area .study-ring-balanced > div > strong { font-size: 28px; }
+.daily-goal-ring-area .study-ring-balanced > div > span { font-size: 10px; }
+@media (max-width: 650px) { .daily-goal-unified { grid-template-columns: 1fr; gap: 16px; padding: 24px; } .daily-goal-summary { max-width: none; } }
+
+/* Keep progress cards consistent with the category-breakdown layout. */
+.daily-goal-unified { grid-template-columns: minmax(200px, .8fr) minmax(0, 1fr); gap: 24px; padding: 24px; background: white; }
+.daily-goal-card-heading { grid-column: 1 / -1; }
+.daily-goal-card-heading h2 { margin: 0 0 7px; font-size: 18px; letter-spacing: -.4px; }
+.daily-goal-card-heading p { margin: 0; color: #637087; font-size: 12px; }
+.daily-goal-ring-area { grid-column: 1; grid-row: 2; }
+.daily-goal-summary { grid-column: 2; grid-row: 2; max-width: none; }
+.daily-goal-ring-area .study-ring-visual { width: 200px; }
+.daily-goal-summary .goal-progress-heading { padding-bottom: 12px; border-bottom: 1px solid #edf0f5; }
+.daily-goal-summary .goal-progress-number { font-size: 32px; }
+.goal-progress-horizontal { grid-template-columns: minmax(160px, .8fr) minmax(0, 1fr); gap: 24px; }
+.goal-progress-horizontal > .study-progress-ring { grid-column: 1; grid-row: 1; }
+.goal-progress-horizontal > .goal-progress-details { grid-column: 2; grid-row: 1; }
+.goal-progress-horizontal .study-ring-visual { width: 160px; }
+.goal-progress-horizontal .study-ring-balanced > div > strong { font-size: 23px; }
+.category-goals-grid .category-goal-card { padding: 22px; background: white; }
+.category-goal-card > button { display: block; margin-left: auto; }
+@media (max-width: 700px) {
+  .daily-goal-unified, .goal-progress-horizontal { grid-template-columns: 1fr; gap: 18px; }
+  .daily-goal-ring-area, .goal-progress-horizontal > .study-progress-ring { grid-column: 1; grid-row: 2; }
+  .daily-goal-summary { grid-column: 1; grid-row: 3; }
+  .goal-progress-horizontal > .study-progress-ring { grid-row: 1; }
+  .goal-progress-horizontal > .goal-progress-details { grid-column: 1; grid-row: 2; }
+}
+
+/* Shared dimensions for daily progress and category breakdown. */
+.daily-goal-unified, .category-breakdown-panel { padding: 24px; min-height: 340px; }
+.daily-goal-unified { row-gap: 20px; }
+.category-breakdown-panel > .panel-heading { min-height: 48px; margin-bottom: 20px; }
+.daily-goal-card-heading { min-height: 48px; }
+.category-breakdown-ring { width: 240px; height: 240px; justify-self: center; max-width: 100%; }
+.daily-goal-ring-area .study-progress-ring { min-height: 240px !important; }
+.daily-goal-ring-area .study-ring-visual { width: 240px; height: 240px; max-width: 100%; }
+.daily-goal-ring-area .study-ring-balanced > div > strong { font-size: 28px; }
+.daily-goal-card-heading h2, .category-breakdown-panel .panel-heading h2 { font-size: 18px; line-height: 1.3; margin: 0 0 7px; letter-spacing: -.4px; }
+.daily-goal-card-heading p, .category-breakdown-panel .panel-heading p { margin: 0; font-size: 12px; line-height: 1.5; color: #637087; }
+
+.category-goal-card .goal-progress-horizontal { grid-template-columns: minmax(200px, .8fr) minmax(0, 1fr); gap: 24px; }
+.category-goal-card .study-ring-visual { width: 240px; height: 240px; max-width: 100%; }
+.category-goal-card .study-progress-ring { min-height: 240px !important; }
+.category-goal-card .study-ring-balanced { gap: 8px; }
+.category-goal-card .study-ring-balanced > div > strong { font-size: 28px; }
+.category-goal-card .study-ring-balanced > div > span { font-size: 10px; }
+.category-goal-card .goal-progress-heading { padding-bottom: 12px; border-bottom: 1px solid #edf0f5; font-size: 14px; font-weight: 650; color: #263247; }
+.category-goal-card .goal-progress-number { margin: 20px 0 12px; font-size: 32px; letter-spacing: -1px; }
+.category-goal-card .goal-progress-details > small { font-size: 13px; }
+.category-goals-grid .category-goal-card { padding: 24px; }
+@media (max-width: 700px) { .category-goal-card .goal-progress-horizontal { grid-template-columns: 1fr; gap: 18px; } }
