@@ -11,7 +11,7 @@ npm run dev
 
 ## Calendar and submission
 
-Click any hour in the weekly calendar to create a study entry. New entries are drafts. **Submit week** saves submission status to Supabase for the signed-in user. It does not send hours to Workday. Entries can be edited or deleted; edits return a submitted entry to draft.
+Click any hour in the weekly calendar to create a study entry. New entries are drafts. **Submit hours** on a study block confirms its hours as actual. Use **Save & submit hours** in the entry editor, or **Submit all draft hours** in the weekly timesheet header for bulk submission. Drafts remain projected time. Analytics distinguishes your manually set goal, projected hours (draft plus submitted), and actual hours (submitted only); submitting does not shrink the projection. Submission status saves to Supabase for the signed-in user. It does not send hours to Workday. Entries can be edited or deleted; edits return a submitted entry to draft.
 
 Manage categories to create, rename, delete, and choose a color for each category. Use **Appearance** to choose a wallpaper theme, upload a wallpaper, set its tint, and customize the sidebar color. These choices sync to your signed-in account, including saved uploaded wallpapers and banner colors.
 

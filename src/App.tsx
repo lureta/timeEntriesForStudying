@@ -1,3 +1,5 @@
+import { formatDuration } from "./services/formatDuration";
+import { studyMetrics } from "./services/studyMetrics";
 import CategoryBreakdown from "./components/CategoryBreakdown";
 import HoursGoalChart from "./components/HoursGoalChart";
 import GoalProgress from "./components/GoalProgress";
@@ -314,7 +316,7 @@ const loadCategoryColors = (): Record<string, string> => {
   return {};
 };
 const dateFrom = (value: string) => new Date(`${value}T12:00:00`);
-const formatHours = (value: number) => `${value.toFixed(1)}h`;
+const formatHours = formatDuration;
 const GRID_START = 0;
 const GRID_END = 24;
 const HOUR_HEIGHT = 64;
@@ -763,7 +765,7 @@ export default function App() {
   const progressData = days.map((day) => {
     const key = iso(day);
     const dailyHours = weekEntries
-      .filter((entry) => entry.date === key)
+      .filter((entry) => entry.date === key && entry.status === "submitted")
       .reduce((sum, entry) => sum + hours(entry), 0);
     return {
       day: day.toLocaleDateString("en-US", { weekday: "short" }),
@@ -772,10 +774,11 @@ export default function App() {
     };
   });
   const categoryBreakdown = [...new Set(categoryEntries.map((entry) => entry.course))].map((name) => ({
-    name, hours: categoryEntries.filter((entry) => entry.course === name).reduce((sum, entry) => sum + hours(entry), 0),
+    name, hours: categoryEntries.filter((entry) => entry.course === name && entry.status === "submitted").reduce((sum, entry) => sum + hours(entry), 0),
     color: categoryColors[name] || COLORS[Math.max(0, categories.indexOf(name)) % COLORS.length],
   })).filter((category) => category.hours > 0).sort((a, b) => b.hours - a.hours);
-  const dailyHoursTotal = categoryEntries.reduce((sum, entry) => sum + hours(entry), 0);
+  const periodMetrics = studyMetrics(categoryEntries);
+  const dailyHoursTotal = periodMetrics.actual;
   const dailyChartData = [{ day: dateFrom(categoryDay).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }), hours: Number(dailyHoursTotal.toFixed(3)) }];
   const moveWeek = (delta: number) =>
     setWeek((w) => {
@@ -886,7 +889,7 @@ export default function App() {
       end,
       notes: notes.trim(),
       name: sessionName.trim(),
-      status: "draft",
+      status: ((event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null)?.value === "submit-hours" ? "submitted" : "draft",
     };
     if (!(await saveStudySession(entry, Boolean(editingEntryId)))) return;
     setNotes("");
@@ -1110,9 +1113,8 @@ export default function App() {
       event.target.value = "";
     }
   };
-  const submitWeek = async () => {
-    if (draftEntries.length === 0 || submittingWeek) return;
-    const ids = draftEntries.map((entry) => entry.id);
+  const submitHours = async (ids: string[]) => {
+    if (ids.length === 0 || submittingWeek) return;
     setSubmittingWeek(true);
     try {
       if (supabase) {
@@ -1131,7 +1133,7 @@ export default function App() {
       ));
       setCloudError("");
     } catch (error) {
-      setCloudError(`Could not submit week: ${error instanceof Error ? error.message : "Network error."}`);
+      setCloudError(`Could not submit hours: ${error instanceof Error ? error.message : "Network error."}`);
     } finally {
       setSubmittingWeek(false);
     }
@@ -1390,7 +1392,7 @@ export default function App() {
       hour: "numeric", minute: date.getMinutes() ? "2-digit" : undefined,
     }).replace(" AM", "am").replace(" PM", "pm");
     const timeLabel = `${formatTime(iso(startDate) < item.day ? new Date(`${item.day}T00:00:00`) : startDate)}–${formatTime(endDate)}`;
-    const eventLabel = `${item.title} · ${timeLabel}${item.kind === "study" ? ` · ${item.status === "saving" ? "Saving…" : item.status === "submitted" ? "Submitted" : "Draft"}` : ""}`;
+    const eventLabel = `${item.title} · ${timeLabel}${item.kind === "study" ? ` · ${item.status === "saving" ? "Saving…" : item.status === "submitted" ? "Submitted" : "Projected"}` : ""}`;
     const style = {
       left: `calc(${(item.lane / item.laneCount) * 100}% + 3px)`,
       width: `calc(${Math.min(1.5 / item.laneCount, 1 - item.lane / item.laneCount) * 100}% - 6px)`,
@@ -1400,13 +1402,13 @@ export default function App() {
       height: `${cardHeight}px`,
       ...(item.color
         ? {
-            backgroundColor: item.color,
-            borderLeftColor: item.color,
-            color: item.textColor || readableText(item.color),
+            backgroundColor: item.kind === "study" && item.status !== "submitted" ? "#fafbfc" : item.color,
+            borderLeftColor: item.kind === "study" && item.status !== "submitted" ? "#b7bec8" : item.color,
+            color: item.kind === "study" && item.status !== "submitted" ? "#566173" : item.textColor || readableText(item.color),
           }
         : {}),
     };
-    const className = `calendar-event ${item.kind === "study" ? "study-event" : "google-event"} ${item.status === "submitted" ? "is-submitted" : ""} ${cardHeight < 40 ? "event-compact" : ""}`;
+    const className = `calendar-event ${item.kind === "study" ? "study-event" : "google-event"} ${item.status === "submitted" ? "is-submitted" : item.kind === "study" ? "is-projected" : ""} ${cardHeight < 40 ? "event-compact" : ""}`;
     const content = (
       <>
         <b>{item.title}</b>
@@ -1415,10 +1417,16 @@ export default function App() {
         {item.kind === "study" && cardHeight >= 56 && (
           <small className="event-status">
             {item.status === "submitted" && <Check size={9} aria-hidden="true" />}
-            {item.status === "saving" ? "Saving…" : item.status === "submitted" ? "Submitted" : "Draft"}
+            {item.status === "saving" ? "Saving…" : item.status === "submitted" ? "Submitted" : "Projected"}
           </small>
         )}
       </>
+    );
+    if (item.kind === "study" && item.onEdit) return (
+      <div key={item.id} className={`${className} study-event-with-actions`} style={style}>
+        <button className="study-event-edit" type="button" title={eventLabel} aria-label={`Edit ${eventLabel}`} onClick={item.onEdit}>{content}</button>
+
+      </div>
     );
     if (item.onEdit)
       return (
@@ -1632,8 +1640,8 @@ export default function App() {
             <section className="panel">
               <div className="panel-heading">
                 <div>
-                  <h2>Weekly schedule</h2>
-                  <p>Drag to instantly add a draft. Click an entry to edit it.</p>
+                  <h2>Weekly timesheet</h2>
+                  <p>Drafts are projected hours. Submit each block to confirm actual study time.</p>
                 </div>
                 <div className="week-nav">
                   <button
@@ -1846,29 +1854,13 @@ export default function App() {
               </div>
               </div>
               <div className="submit-bar">
-                <div>
-                  <strong>
-                    {draftEntries.length
-                      ? `${draftEntries.length} draft ${draftEntries.length === 1 ? "entry" : "entries"}`
-                      : "Week is up to date"}
-                  </strong>
-                  <span>
-                    {draftEntries.length
-                      ? "Ready to submit for this week"
-                      : "All entries for this week are submitted"}
-                  </span>
-                </div>
-                <button
-                  className="primary"
-                  disabled={draftEntries.length === 0 || submittingWeek || Boolean(supabase && !sessionsLoaded)}
-                  onClick={() => void submitWeek()}
-                >
-                  <Check size={16} /> {submittingWeek ? "Submitting…" : "Submit week"}
+                <div><strong>{draftEntries.length} projected {draftEntries.length === 1 ? "entry" : "entries"} · {formatHours(studyMetrics(draftEntries).projected)}</strong>
+                  <span>{draftEntries.length ? "Review your time, then submit to confirm your actual hours." : "All saved hours for this week are submitted."}</span></div>
+                <button className="primary" disabled={!draftEntries.length || submittingWeek || Boolean(supabase && !sessionsLoaded)}
+                  onClick={() => void submitHours(draftEntries.map((entry) => entry.id))}>
+                  <Check size={16} /> {submittingWeek ? "Submitting…" : "Submit all projected hours"}
                 </button>
               </div>
-              <p className="submission-note">
-                Submitted sessions stay saved to your account. This does not send hours to Workday.
-              </p>
             </section>
             <div className="schedule-sidebar">
             <aside className="panel summary-panel">
@@ -1886,18 +1878,18 @@ export default function App() {
                 </p>
               </div>
               <dl className="summary-list">
-                <div><dt>Study hours</dt><dd>{formatHours(total)}</dd></div>
+                <div><dt>Projected hours</dt><dd>{formatHours(total)}</dd></div>
                 <div>
-                  <dt>Draft hours</dt>
+                  <dt>Awaiting submission</dt>
                   <dd>{formatHours(draftEntries.reduce((sum, entry) => sum + hours(entry), 0))}</dd>
                 </div>
                 <div>
-                  <dt>Submitted hours</dt>
+                  <dt>Actual hours</dt>
                   <dd>{formatHours(weekEntries.filter((entry) => entry.status === "submitted").reduce((sum, entry) => sum + hours(entry), 0))}</dd>
                 </div>
                 <div><dt>Sessions</dt><dd>{weekEntries.length}</dd></div>
-                <div><dt>Weekly goal</dt><dd>{goal}h</dd></div>
-                <div className="summary-total"><dt>Total hours</dt><dd>{formatHours(total)}</dd></div>
+                <div><dt>Weekly goal</dt><dd>{formatDuration(goal)}</dd></div>
+                <div className="summary-total"><dt>Submitted actual</dt><dd>{formatHours(studyMetrics(weekEntries).actual)}</dd></div>
               </dl>
             </aside>
             <InspirationNote key={authUser?.id || "local"}
@@ -1923,10 +1915,10 @@ export default function App() {
                 <p>{categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : `${days[0].toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${days[6].toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`}</p></div>
               <div className="daily-goal-summary">
                 <GoalProgress key={`${categoryRange}:${categoryDay}`} compact label={categoryRange === "day" ? "Daily goal" : "Weekly goal"}
-                  target={categoryRange === "day" ? dailyGoals[categoryDay] || 0 : goal} actual={dailyHoursTotal} max={categoryRange === "day" ? 24 : 200}
+                  target={categoryRange === "day" ? dailyGoals[categoryDay] || 0 : goal} actual={dailyHoursTotal} projected={periodMetrics.projected} max={categoryRange === "day" ? 24 : 200}
                   onSave={(value) => { if (categoryRange === "day") setDailyGoals((current) => ({ ...current, [categoryDay]: value })); else { setGoal(value); setGoalInput(String(value)); } }} />
               </div>
-              <div className="daily-goal-ring-area"><HoursGoalChart label={categoryRange === "day" ? "Daily progress" : "Weekly progress"} actual={dailyHoursTotal} goal={categoryRange === "day" ? dailyGoals[categoryDay] || 0 : goal} color={chartColor} height={240} showCaption={false} /></div>
+              <div className="daily-goal-ring-area"><HoursGoalChart label={categoryRange === "day" ? "Daily progress" : "Weekly progress"} actual={dailyHoursTotal} projected={periodMetrics.projected} goal={categoryRange === "day" ? dailyGoals[categoryDay] || 0 : goal} color={chartColor} height={240} showCaption={false} /></div>
             </section>
             {categoryRange === "week" && <section className="panel progress-chart-panel">
               <div className="panel-heading"><div><h2>Study hours by day</h2><p>Daily totals compared with your weekly goal’s daily pace</p></div><ChartColumn size={20} /></div>
@@ -1934,8 +1926,8 @@ export default function App() {
                 <ComposedChart data={progressData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
                   <CartesianGrid stroke="#e8ede9" strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="day" tickLine={false} axisLine={false} /><YAxis tickLine={false} axisLine={false} width={34} />
-                  <Tooltip formatter={(value) => `${Number(value).toFixed(1)}h`} />
-                  <Bar dataKey="actual" name="Study hours" fill={chartColor} radius={[4, 4, 0, 0]} />
+                  <Tooltip formatter={(value) => formatDuration(Number(value))} />
+                  <Bar dataKey="actual" name="Submitted hours" fill={chartColor} radius={[4, 4, 0, 0]} />
                   <Line type="monotone" dataKey="target" name="Average daily pace" stroke={chartGoalColor} strokeWidth={2} strokeDasharray="5 5" dot={false} />
                 </ComposedChart>
               </ResponsiveContainer></div>
@@ -1964,8 +1956,9 @@ export default function App() {
           {!categoryEntries.length && !Object.keys(currentCategoryGoals).length && <p className="helper">Your categories will appear here when you log study time. You can also add a category goal above.</p>}
           <div className="category-goals-grid">{[...new Set([...categoryEntries.map((entry) => entry.course), ...Object.keys(currentCategoryGoals)])].map((category) => {
             const target = currentCategoryGoals[category] || 0;
-            const actual = categoryEntries.filter((entry) => entry.course === category).reduce((sum, entry) => sum + hours(entry), 0);
-            return <div className="category-goal-card" key={`${categoryGoalPeriod}:${category}`}><GoalProgress horizontal periodTotal={categoryEntries.reduce((sum, entry) => sum + hours(entry), 0)} chartMax={Math.max(1, ...Object.values(currentCategoryGoals), ...[...new Set(categoryEntries.map((entry) => entry.course))].map((name) => categoryEntries.filter((entry) => entry.course === name).reduce((sum, entry) => sum + hours(entry), 0)))} color={categoryColors[category] || COLORS[Math.max(0, categories.indexOf(category)) % COLORS.length]} label={category} target={target} actual={actual} max={categoryRange === "day" ? 24 : 168}
+            const metrics = studyMetrics(categoryEntries.filter((entry) => entry.course === category));
+            const actual = metrics.actual;
+            return <div className="category-goal-card" key={`${categoryGoalPeriod}:${category}`}><GoalProgress horizontal periodTotal={periodMetrics.actual} chartMax={Math.max(1, ...Object.values(currentCategoryGoals), ...[...new Set(categoryEntries.map((entry) => entry.course))].map((name) => categoryEntries.filter((entry) => entry.course === name).reduce((sum, entry) => sum + hours(entry), 0)))} color={categoryColors[category] || COLORS[Math.max(0, categories.indexOf(category)) % COLORS.length]} label={category} target={target} actual={actual} projected={metrics.projected} max={categoryRange === "day" ? 24 : 168}
               onSave={(value) => setCategoryGoals((current) => ({ ...current, [categoryGoalPeriod]: { ...current[categoryGoalPeriod], [category]: value } }))} />
               {target > 0 && <button className="secondary small" type="button" aria-label={`Remove ${category} goal`} onClick={() => setCategoryGoals((current) => {
                 const updated = { ...current[categoryGoalPeriod] }; delete updated[category]; return { ...current, [categoryGoalPeriod]: updated };
@@ -2327,10 +2320,9 @@ export default function App() {
                 />
               </div>
               {formError && <p className="error">{formError}</p>}
-              <div className="form-footer">
+              <div className="form-footer study-entry-footer">
                 <span>
-                  {Math.max(0, (minutes(end) - minutes(start)) / 60).toFixed(2)}
-                  {" "}hours · {editingEntryId ? "will be a draft" : "saved as draft"}
+                  {formatDuration(Math.max(0, (minutes(end) - minutes(start)) / 60))} · projected until submitted
                 </span>
                 <div className="entry-footer-actions">
                 {editingEntryId && (
@@ -2342,9 +2334,8 @@ export default function App() {
                     <Trash2 size={14} /> Delete
                   </button>
                 )}
-                <button className="primary" type="submit">
-                  {editingEntryId ? "Save changes" : <><Plus size={16} /> Add entry</>}
-                </button>
+                <button className="secondary" type="submit" value="draft">Save as projected</button>
+                <button className="primary" type="submit" value="submit-hours"><Check size={14} /> Submit hours</button>
                 </div>
               </div>
             </form>

@@ -1,3 +1,4 @@
+import { formatDuration } from "../services/formatDuration";
 import { useEffect, useRef, useState } from "react";
 import { Pause, Play, Timer } from "lucide-react";
 import { roundedFocusBlock, remainingTime } from "../services/focusTime";
@@ -133,7 +134,7 @@ export default function FocusTimer({ categories, onSave, preferences, onPreferen
       <label>Category<select value={course} disabled={locked} onChange={(event) => setCourse(event.target.value)}>{!categories.includes(course) && <option value={course}>{course}</option>}{categories.map((value) => <option key={value}>{value}</option>)}</select></label>
     </div>
     {mode === "pomodoro" && <p className="helper">{phase === "focus" ? "Focus" : "Break"} · {rounds} focus {rounds === 1 ? "round" : "rounds"} saved</p>}
-    <p className="focus-saved-time" role="status">Saved this visit: <strong>{Math.floor(savedMinutes / 60)}h {savedMinutes % 60}m</strong></p>
+    <p className="focus-saved-time" role="status">Saved this visit: <strong>{formatDuration(savedMinutes / 60)}</strong></p>
     <div className="timer-face" aria-label="Time remaining">{formatRemaining(remaining)}</div>
     <div className="focus-actions">
       <button className="primary small" disabled={saving || !validDuration(duration) || !validDuration(focusMinutes) || !validDuration(breakMinutes) || !course || (!running && remaining <= 0)} type="button" onClick={running ? pause : startOrResume}>{running ? <Pause size={15} /> : <Play size={15} />}{running ? "Pause" : started ? "Resume" : phase === "break" ? "Start break" : "Start studying"}</button>
