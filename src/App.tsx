@@ -1,18 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays,
   ChartColumn,
-  Download,
   Plus,
   Trash2,
-  Timer,
   BookOpen,
   ChevronLeft,
   ChevronRight,
   LogOut,
   RefreshCw,
-  Square,
-  Play,
   Check,
   X,
   Pencil,
@@ -38,6 +34,14 @@ import type { User } from "@supabase/supabase-js";
 import { supabase } from "./services/supabase";
 import { layoutCalendarItems } from "./services/calendarLayout";
 
+import type { Task } from "./components/StudyTasks";
+import { useWorkspaceSync } from "./hooks/useWorkspaceSync";
+import StudyTasks from "./components/StudyTasks";
+import type { FocusPreferences } from "./components/FocusTimer";
+import FocusTimer from "./components/FocusTimer";
+import { listAppearanceThemes, saveAppearanceTheme, deleteAppearanceTheme } from "./services/appearanceThemes";
+import type { AppearanceTheme } from "./services/appearanceThemes";
+
 type Entry = {
   id: string;
   date: string;
@@ -55,6 +59,11 @@ type StudySessionRow = {
   start_time: string;
   end_time: string;
   created_at: string;
+  status: "draft" | "submitted";
+};
+type CalendarColorTheme = { id: string; label: string; colors: string[]; overrides: Record<string, string>; categoryColors?: Record<string, string> };
+const loadColorSetting = <T,>(key: string, fallback: T): T => {
+  try { return JSON.parse(localStorage.getItem(key) || "null") ?? fallback; } catch { return fallback; }
 };
 type CalEvent = {
   id: string;
@@ -64,8 +73,16 @@ type CalEvent = {
   allDay?: boolean;
   htmlLink?: string;
   calendarName: string;
+  textColor?: string;
+  calendarId: string;
+  eventId: string;
+  etag?: string;
+  recurring?: boolean;
+  seriesId?: string;
+  editable?: boolean;
+  color?: string;
 };
-type View = "timesheet" | "analytics" | "history";
+type View = "timesheet" | "analytics" | "tasks" | "appearance";
 type GoogleTokenResponse = { access_token?: string; error?: string };
 type TokenClient = {
   requestAccessToken: (options?: { prompt?: string }) => void;
@@ -106,6 +123,24 @@ const COLORS = [
   "#999999",
   "#e1e1e1",
 ];
+// Google Calendar's legacy API presets differ from its current web palette.
+// Only translate an exact preset ID/value pair; retain custom RGB colors.
+const GOOGLE_CALENDAR_PRESETS: Record<string, { api: string; web: string }> = {
+  "10": { api: "#b3dc6c", web: "#c0ca33" },
+  "20": { api: "#cabdbf", web: "#a79b8e" },
+  "21": { api: "#cca6ac", web: "#ad1457" },
+};
+const googleCalendarBackground = (calendar: { colorId?: string; backgroundColor?: string }) => {
+  const preset = calendar.colorId ? GOOGLE_CALENDAR_PRESETS[calendar.colorId] : undefined;
+  return preset && calendar.backgroundColor?.toLowerCase() === preset.api
+    ? preset.web
+    : calendar.backgroundColor;
+};
+const CATEGORY_THEMES = {
+  soft: { label: "Soft", colors: ["#cbdcc5", "#d8cce5", "#f0d9bf", "#c7dce6", "#e8c9ce", "#dddcb8"], calendar: "#c7dce6" },
+  vivid: { label: "Vivid", colors: ["#387568", "#7e5ba4", "#c07835", "#366f9b", "#b64d69", "#828c37"], calendar: "#366f9b" },
+  neutral: { label: "Neutral", colors: ["#c7c7c7", "#a8a8a8", "#8e8e8e", "#d7d7d7", "#b8b8b8", "#707070"], calendar: "#b8b8b8" },
+} as const;
 const THEMES = {
   forest: {
     label: "Forest",
@@ -198,6 +233,7 @@ const entryToSessionRow = (entry: Entry, userId: string) => ({
   user_id: userId,
   course: entry.course,
   description: entry.notes,
+  status: entry.status || "draft",
   start_time: new Date(`${entry.date}T${entry.start}:00`).toISOString(),
   end_time: new Date(`${entry.date}T${entry.end}:00`).toISOString(),
 });
@@ -211,23 +247,17 @@ const sessionRowToEntry = (row: StudySessionRow): Entry => {
     start: hhmm(start),
     end: hhmm(end),
     notes: row.description || "",
-    status: "draft",
+    status: row.status,
   };
 };
-const localEntryKey = (entry: Entry) =>
-  [
-    entry.course.trim().toLowerCase(),
-    entry.notes.trim().toLowerCase(),
-    new Date(`${entry.date}T${entry.start}:00`).toISOString(),
-    new Date(`${entry.date}T${entry.end}:00`).toISOString(),
-  ].join("|");
-const sessionRowKey = (row: StudySessionRow) =>
-  [
-    row.course.trim().toLowerCase(),
-    (row.description || "").trim().toLowerCase(),
-    new Date(row.start_time).toISOString(),
-    new Date(row.end_time).toISOString(),
-  ].join("|");
+const saveLocalSetting = (key: string, value: string) => {
+  if (supabase) return;
+  try { localStorage.setItem(key, value); } catch { /* Cloud settings remain authoritative when configured. */ }
+};
+const removeLocalSetting = (key: string) => {
+  if (supabase) return;
+  try { localStorage.removeItem(key); } catch { /* Keep the current setting in memory. */ }
+};
 const loadEntries = (): Entry[] => {
   try {
     return JSON.parse(
@@ -280,13 +310,15 @@ const HOUR_HEIGHT = 64;
 const clockLabel = (hour: number) =>
   new Date(2000, 0, 1, hour).toLocaleTimeString("en-US", { hour: "numeric" });
 const readableText = (hex: string) => {
-  const value = hex.replace("#", "");
-  const red = parseInt(value.slice(0, 2), 16);
-  const green = parseInt(value.slice(2, 4), 16);
-  const blue = parseInt(value.slice(4, 6), 16);
-  return red * 0.299 + green * 0.587 + blue * 0.114 > 155
-    ? "#202a3b"
-    : "#f6f7f5";
+  const channels = hex.replace("#", "").match(/.{2}/g)?.map((part) => {
+    const value = parseInt(part, 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  if (!channels || channels.length !== 3) return "#000000";
+  const luminance = channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+  return (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05)
+    ? "#000000"
+    : "#ffffff";
 };
 const hexWithAlpha = (hex: string, alpha: number) => {
   const value = hex.replace("#", "");
@@ -296,6 +328,38 @@ const hexWithAlpha = (hex: string, alpha: number) => {
   return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 };
 
+function ColorField({ value, onChange, label, id }: { value: string; onChange: (color: string) => void; label: string; id?: string }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const valid = /^#[0-9a-fA-F]{6}$/.test(draft);
+  return <span className="color-field">
+    <input id={id} type="color" value={value} aria-label={label} onChange={(event) => onChange(event.target.value)} />
+    <input className="color-hex-field" type="text" value={draft} aria-label={`${label} hex code`}
+      placeholder="#ffd1dc" maxLength={7} spellCheck={false} aria-invalid={!valid}
+      onChange={(event) => {
+        const next = event.target.value; setDraft(next);
+        if (/^#[0-9a-fA-F]{6}$/.test(next)) onChange(next.toLowerCase());
+      }} onBlur={() => { if (!valid) setDraft(value); }}
+      onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }} />
+  </span>;
+}
+
+function InspirationNote({ background, note, setNote }: { background: string; note: string; setNote: (value: string) => void }) {
+  return <section className="inspiration-note" style={{ backgroundColor: background, color: readableText(background) }} aria-labelledby="inspiration-title">
+    <div className="inspiration-heading"><h2 id="inspiration-title">Note to self</h2></div>
+    <textarea aria-label="Your inspiration message" value={note} maxLength={600} rows={5}
+      placeholder="write a note!" onChange={(event) => setNote(event.target.value)} />
+
+  </section>;
+}
+
+function StudydayBrand() {
+  return (<div className="brand">
+          <span className="brand-icon"><CalendarClock size={23} /></span>
+          <span>studyday<small>STUDY TIMESHEET</small></span>
+        </div>);
+}
+
 export default function App() {
   const [entries, setEntries] = useState<Entry[]>(loadEntries);
   const sessionRevision = useRef(0);
@@ -304,6 +368,8 @@ export default function App() {
     loadCategoryColors,
   );
   const [view, setView] = useState<View>("timesheet");
+  const [categoryRange, setCategoryRange] = useState<"day" | "week">("week");
+  const [categoryDay, setCategoryDay] = useState(iso(new Date()));
   const [week, setWeek] = useState(() => monday(new Date()));
   const [course, setCourse] = useState(DEFAULT_CATEGORIES[0]);
   const [date, setDate] = useState(iso(new Date()));
@@ -313,10 +379,11 @@ export default function App() {
   const [goal, setGoal] = useState(() =>
     Number(localStorage.getItem("studyday.goal") || 20),
   );
+  const [focusPreferences, setFocusPreferences] = useState<FocusPreferences>(() => loadColorSetting("studyday.focusPreferences", { mode: "countdown", duration: 30, focusMinutes: 25, breakMinutes: 5 }));
+  const [taskData, setTaskData] = useState<{ tasks: Task[] }>(() => !supabase ? loadColorSetting("studyday.tasks.local", { tasks: [] }) : { tasks: [] });
+  const [inspirationNote, setInspirationNote] = useState(() => !supabase ? localStorage.getItem("studyday.inspiration.local") || "" : "");
   const [goalInput, setGoalInput] = useState(() => String(goal));
-  const [timerStarted, setTimerStarted] = useState<number | null>(null);
-  const [timerNow, setTimerNow] = useState(Date.now());
-  const [timerMessage, setTimerMessage] = useState("");
+
   const [events, setEvents] = useState<CalEvent[]>([]);
   const [googleToken, setGoogleToken] = useState<string | null>(null);
   const [calendarError, setCalendarError] = useState("");
@@ -324,21 +391,96 @@ export default function App() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authActionLoading, setAuthActionLoading] = useState(false);
+  const [welcomeMode, setWelcomeMode] = useState<"signin" | "signup">("signin");
+  const [submittingWeek, setSubmittingWeek] = useState(false);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsLoaded, setSessionsLoaded] = useState(!supabase);
   const [cloudError, setCloudError] = useState("");
   const [cloudStatus, setCloudStatus] = useState("");
-  const [localImportCandidates, setLocalImportCandidates] = useState<Entry[]>([]);
-  const [localImportDone, setLocalImportDone] = useState(false);
-  const [importConfirmOpen, setImportConfirmOpen] = useState(false);
-  const [importLoading, setImportLoading] = useState(false);
-  const [importMessage, setImportMessage] = useState("");
+  const [googleColorOverrides, setGoogleColorOverrides] = useState<Record<string, string>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("studyday.googleColorOverrides") || "{}");
+      const entries = Object.entries(saved).filter((entry): entry is [string, string] =>
+        typeof entry[1] === "string" && (entry[1] === "google" || /^#[0-9a-fA-F]{6}$/.test(entry[1])));
+      return Object.fromEntries(entries);
+    } catch { return {}; }
+  });
+  useEffect(() => {
+    saveLocalSetting("studyday.googleColorOverrides", JSON.stringify(googleColorOverrides));
+  }, [googleColorOverrides]);
+  const googleColorKey = (event: CalEvent) => JSON.stringify([event.calendarId, event.seriesId || event.eventId]);
+  const [editingGoogle, setEditingGoogle] = useState<CalEvent | null>(null);
+  const [googleDraft, setGoogleDraft] = useState({ title: "", start: "", end: "" });
+  const [googleSaveError, setGoogleSaveError] = useState("");
+  const [googleSaving, setGoogleSaving] = useState(false);
+  const openGoogleEditor = (event: CalEvent) => {
+    const localTime = (value: string) => { const date = new Date(value); return `${iso(date)}T${hhmm(date)}`; };
+    setGoogleDraft({ title: event.summary, start: event.allDay ? event.start : localTime(event.start), end: event.allDay ? event.end : localTime(event.end) });
+    setGoogleSaveError("");
+    setEditingGoogle(event);
+  };
   const [showCalendar, setShowCalendar] = useState(true);
-  const calendarScrollRef = useRef<HTMLDivElement>(null);
+  const [useGoogleColors, setUseGoogleColors] = useState(() =>
+    localStorage.getItem("studyday.useGoogleColors") !== "false");
+  useEffect(() => {
+    saveLocalSetting("studyday.useGoogleColors", String(useGoogleColors));
+  }, [useGoogleColors]);
+  const [googleEventColor, setGoogleEventColor] = useState(() => {
+    const saved = localStorage.getItem("studyday.googleEventColor");
+    return saved && /^#[0-9a-fA-F]{6}$/.test(saved) ? saved : "#f8e9e2";
+  });
+  useEffect(() => {
+    saveLocalSetting("studyday.googleEventColor", googleEventColor);
+  }, [googleEventColor]);
+  const [calendarThemesOpen, setCalendarThemesOpen] = useState(false);
+  const [calendarThemeName, setCalendarThemeName] = useState("");
+  const [editingThemeId, setEditingThemeId] = useState<string | null>(null);
+  const [editingThemeColors, setEditingThemeColors] = useState<string[]>([]);
+  const [calendarPalette, setCalendarPalette] = useState<string[]>(() => loadColorSetting("studyday.calendarPalette", [...CATEGORY_THEMES.soft.colors]));
+  const [savedCalendarThemes, setSavedCalendarThemes] = useState<CalendarColorTheme[]>(() => loadColorSetting("studyday.savedCalendarThemes", []));
+  const [calendarSeriesSlots, setCalendarSeriesSlots] = useState<Record<string, number>>(() => loadColorSetting("studyday.calendarSeriesSlots", {}));
+  const [calendarThemeError, setCalendarThemeError] = useState("");
+  useEffect(() => { saveLocalSetting("studyday.calendarPalette", JSON.stringify(calendarPalette)); }, [calendarPalette]);
+  useEffect(() => { saveLocalSetting("studyday.savedCalendarThemes", JSON.stringify(savedCalendarThemes)); }, [savedCalendarThemes]);
+  useEffect(() => { saveLocalSetting("studyday.calendarSeriesSlots", JSON.stringify(calendarSeriesSlots)); }, [calendarSeriesSlots]);
+  useEffect(() => {
+    setCalendarSeriesSlots((current) => {
+      const next = { ...current };
+      let changed = false;
+      let slot = Math.max(-1, ...Object.values(current)) + 1;
+      for (const key of [...new Set(events.map(googleColorKey))].sort()) {
+        if (!(key in next)) { next[key] = slot++; changed = true; }
+      }
+      return changed ? next : current;
+    });
+  }, [events]);
+  const applyCalendarTheme = (colors: readonly string[], overrides: Record<string, string> = {}, savedCategoryColors: Record<string, string> = {}) => {
+    const names = [...new Set([...categories, ...entries.map((entry) => entry.course)])];
+    setCategoryColors(Object.fromEntries(names.map((name, index) => [name, savedCategoryColors[name] || colors[index % colors.length]])));
+    setCalendarPalette([...colors]);
+    setGoogleColorOverrides({ ...overrides });
+    setUseGoogleColors(false);
+  };
+  const googleAppearance = (event: CalEvent) => {
+    const override = googleColorOverrides[googleColorKey(event)];
+    const customColor = override && override !== "google" ? override : undefined;
+    const useOriginal = override === "google" || (!customColor && useGoogleColors);
+    const seriesColor = calendarPalette[(calendarSeriesSlots[googleColorKey(event)] ?? 0) % calendarPalette.length];
+    const color = customColor || (useOriginal && event.color) || seriesColor || googleEventColor;
+    return { backgroundColor: color, color: useOriginal ? event.textColor || readableText(color) : readableText(color) };
+  };
+  const usedEventColors = [...new Set([
+    ...events.map((event) => googleAppearance(event).backgroundColor),
+    ...entries.map((entry) => categoryColors[entry.course] || COLORS[Math.max(0, categories.indexOf(entry.course)) % COLORS.length]),
+  ].map((color) => color.toLowerCase()))];
+  const calendarScrollRef = useCallback((node: HTMLDivElement | null) => {
+    if (node) node.scrollTop = (7 - GRID_START) * HOUR_HEIGHT;
+  }, []);
   const [showEntryForm, setShowEntryForm] = useState(false);
   const [formError, setFormError] = useState("");
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
+  const [categoryThemesOpen, setCategoryThemesOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [editingCategory, setEditingCategory] = useState<string | null>(null);
   const [categoryNameDraft, setCategoryNameDraft] = useState("");
@@ -362,60 +504,116 @@ export default function App() {
   const [bannerColorInput, setBannerColorInput] = useState(
     () => localStorage.getItem("studyday.bannerColor") || "#242424",
   );
-  const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [appearanceError, setAppearanceError] = useState("");
+  const [savedAppearances, setSavedAppearances] = useState<AppearanceTheme[]>([]);
+  const [appearanceName, setAppearanceName] = useState("");
+  const [editingAppearanceId, setEditingAppearanceId] = useState<string | null>(null);
+  const [appearanceBusy, setAppearanceBusy] = useState(false);
+  const [appearancesLoaded, setAppearancesLoaded] = useState(false);
+  useEffect(() => {
+    setGoogleToken(null); setEvents([]); setEditingGoogle(null);
+  }, [authUser?.id]);
+  const applyAppearance = (item: AppearanceTheme) => {
+    setTheme(item.theme); setWallpaper(item.wallpaper);
+    setBannerColor(item.bannerColor); setBannerColorInput(item.bannerColor || THEMES[item.theme].sidebar);
+    setWallpaperTint(item.tint); setWallpaperTintStrength(item.overlay);
+  };
+  const saveCurrentAppearance = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (appearanceBusy) return;
+    const name = appearanceName.trim();
+    if (!name) { setAppearanceError("Name your appearance theme."); return; }
+    if (savedAppearances.some((item) => item.id !== editingAppearanceId && item.name.toLowerCase() === name.toLowerCase())) { setAppearanceError("A theme already uses that name."); return; }
+    setAppearanceBusy(true); setAppearanceError("");
+    const item: AppearanceTheme = { id: editingAppearanceId || crypto.randomUUID(), name, theme, wallpaper, bannerColor: bannerColor || THEMES[theme].sidebar, tint: wallpaperTint, overlay: wallpaperTintStrength };
+    try {
+      if (!supabase) await saveAppearanceTheme(item);
+      setSavedAppearances((current) => [...current.filter((saved) => saved.id !== item.id), item]);
+      setEditingAppearanceId(null); setAppearanceName("");
+    } catch { setAppearanceError("Could not save this theme. Browser storage may be full or unavailable."); }
+    finally { setAppearanceBusy(false); }
+  };
+  const removeAppearance = async (id: string) => {
+    setAppearanceBusy(true);
+    try {
+      if (!supabase) await deleteAppearanceTheme(id);
+      setSavedAppearances((current) => current.filter((item) => item.id !== id));
+      if (editingAppearanceId === id) { setEditingAppearanceId(null); setAppearanceName(""); }
+    } catch { setAppearanceError("Could not delete this theme. Please try again."); }
+    finally { setAppearanceBusy(false); }
+  };
+  const workspace = { categories, categoryColors, goal, theme, wallpaper, wallpaperTint, wallpaperTintStrength, bannerColor,
+    googleColorOverrides, useGoogleColors, googleEventColor, calendarPalette, savedCalendarThemes, calendarSeriesSlots,
+    savedAppearances, taskData, inspirationNote, focusPreferences };
+  const workspaceSync = useWorkspaceSync(authUser?.id, workspace, {
+    categories: DEFAULT_CATEGORIES, categoryColors: {}, goal: 20, theme: "forest" as ThemeName, wallpaper: "", wallpaperTint: "#f5f5f5",
+    wallpaperTintStrength: 82, bannerColor: "", googleColorOverrides: {}, useGoogleColors: true, googleEventColor: "#f8e9e2",
+    calendarPalette: [...CATEGORY_THEMES.soft.colors], savedCalendarThemes: [], calendarSeriesSlots: {}, savedAppearances: [], taskData: { tasks: [] }, inspirationNote: "", focusPreferences: { mode: "countdown", duration: 30, focusMinutes: 25, breakMinutes: 5 },
+  }, (value) => {
+    setCategories(value.categories); setCategoryColors(value.categoryColors); setGoal(value.goal); setGoalInput(String(value.goal));
+    setTheme(value.theme); setWallpaper(value.wallpaper); setWallpaperTint(value.wallpaperTint); setWallpaperTintStrength(value.wallpaperTintStrength);
+    setBannerColor(value.bannerColor); setBannerColorInput(value.bannerColor || THEMES[value.theme].sidebar);
+    setGoogleColorOverrides(value.googleColorOverrides); setUseGoogleColors(value.useGoogleColors); setGoogleEventColor(value.googleEventColor);
+    setCalendarPalette(value.calendarPalette); setSavedCalendarThemes(value.savedCalendarThemes); setCalendarSeriesSlots(value.calendarSeriesSlots);
+    setSavedAppearances(value.savedAppearances); setAppearancesLoaded(true); setTaskData(value.taskData); setInspirationNote(value.inspirationNote); setFocusPreferences(value.focusPreferences);
+  }, async () => {
+    const legacyNote = localStorage.getItem(`studyday.inspiration.${authUser?.id}`) || "";
+    return { savedAppearances: await listAppearanceThemes(), taskData: loadColorSetting(`studyday.tasks.${authUser?.id}`, { tasks: [] }),
+      inspirationNote: legacyNote === "One session at a time. Your effort counts." ? "" : legacyNote };
+  });
+  useEffect(() => {
+    if (supabase) return;
+    void listAppearanceThemes().then((items) => { setSavedAppearances(items); setAppearancesLoaded(true); });
+  }, []);
+  useEffect(() => {
+    if (supabase) return;
+    saveLocalSetting("studyday.tasks.local", JSON.stringify(taskData));
+    saveLocalSetting("studyday.inspiration.local", inspirationNote);
+    saveLocalSetting("studyday.focusPreferences", JSON.stringify(focusPreferences));
+  }, [taskData, inspirationNote, focusPreferences]);
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
   const palette = THEMES[theme];
   useEffect(() => {
     if (!supabase)
-      localStorage.setItem("studyday.entries", JSON.stringify(entries));
+      saveLocalSetting("studyday.entries", JSON.stringify(entries));
   }, [entries]);
   useEffect(
-    () => localStorage.setItem("studyday.categories", JSON.stringify(categories)),
+    () => saveLocalSetting("studyday.categories", JSON.stringify(categories)),
     [categories],
   );
   useEffect(
     () =>
-      localStorage.setItem(
+      saveLocalSetting(
         "studyday.categoryColors",
         JSON.stringify(categoryColors),
       ),
     [categoryColors],
   );
-  useEffect(() => localStorage.setItem("studyday.theme", theme), [theme]);
+  useEffect(() => saveLocalSetting("studyday.theme", theme), [theme]);
   useEffect(() => {
-    if (wallpaper) localStorage.setItem("studyday.wallpaper", wallpaper);
-    else localStorage.removeItem("studyday.wallpaper");
+    if (wallpaper) saveLocalSetting("studyday.wallpaper", wallpaper);
+    else removeLocalSetting("studyday.wallpaper");
   }, [wallpaper]);
   useEffect(
-    () => localStorage.setItem("studyday.wallpaperTint", wallpaperTint),
+    () => saveLocalSetting("studyday.wallpaperTint", wallpaperTint),
     [wallpaperTint],
   );
   useEffect(
     () =>
-      localStorage.setItem(
+      saveLocalSetting(
         "studyday.wallpaperTintStrength",
         String(wallpaperTintStrength),
       ),
     [wallpaperTintStrength],
   );
   useEffect(() => {
-    if (bannerColor) localStorage.setItem("studyday.bannerColor", bannerColor);
-    else localStorage.removeItem("studyday.bannerColor");
+    if (bannerColor) saveLocalSetting("studyday.bannerColor", bannerColor);
+    else removeLocalSetting("studyday.bannerColor");
   }, [bannerColor]);
   useEffect(() => {
-    if (!bannerColor) setBannerColorInput("#242424");
+    if (!bannerColor) setBannerColorInput(THEMES[theme].sidebar);
   }, [bannerColor, theme]);
-  useEffect(() => localStorage.setItem("studyday.goal", String(goal)), [goal]);
-  useEffect(() => {
-    if (timerStarted === null) return;
-    const id = window.setInterval(() => setTimerNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [timerStarted]);
-  useEffect(() => {
-    if (calendarScrollRef.current)
-      calendarScrollRef.current.scrollTop = 7 * HOUR_HEIGHT;
-  }, []);
+  useEffect(() => saveLocalSetting("studyday.goal", String(goal)), [goal]);
   useEffect(() => {
     if (!supabase) {
       setAuthLoading(false);
@@ -461,9 +659,6 @@ export default function App() {
   useEffect(() => {
     setShowEntryForm(false);
     setEditingEntryId(null);
-    setImportConfirmOpen(false);
-    setImportMessage("");
-    setLocalImportCandidates([]);
     if (!supabase || !authUser) {
       if (supabase) setEntries(loadEntries());
       setSessionsLoading(false);
@@ -485,7 +680,7 @@ export default function App() {
       try {
         const { data, error } = await client
           .from("study_sessions")
-          .select("id,user_id,course,description,start_time,end_time,created_at")
+          .select("id,user_id,course,description,start_time,end_time,created_at,status")
           .eq("user_id", authUser.id)
           .order("start_time", { ascending: false });
         if (!active || revision !== sessionRevision.current) return;
@@ -495,18 +690,7 @@ export default function App() {
           return;
         }
         const rows = (data || []) as StudySessionRow[];
-        setEntries((current) => {
-          const statuses = new Map(current.map((entry) => [entry.id, entry.status]));
-          return rows.map((row) => ({
-            ...sessionRowToEntry(row),
-            status: statuses.get(row.id) || "draft",
-          }));
-        });
-        const localEntries = loadEntries();
-        setLocalImportCandidates(localEntries);
-        setLocalImportDone(
-          localStorage.getItem(`studyday.imported.${authUser.id}`) === "true",
-        );
+        setEntries(rows.map(sessionRowToEntry));
         setSessionsLoaded(true);
         setCloudError("");
         setCloudStatus("Synced");
@@ -549,10 +733,11 @@ export default function App() {
   );
   const draftEntries = weekEntries.filter((entry) => entry.status !== "submitted");
   const total = weekEntries.reduce((sum, e) => sum + hours(e), 0);
-  const grouped = categories.map((name, i) => ({
+  const categoryEntries = categoryRange === "day" ? entries.filter((entry) => entry.date === categoryDay) : weekEntries;
+  const grouped = [...new Set([...categories, ...categoryEntries.map((entry) => entry.course)])].map((name, i) => ({
     name,
     color: categoryColors[name] || COLORS[i % COLORS.length],
-    value: weekEntries
+    value: categoryEntries
       .filter((e) => e.course === name)
       .reduce((sum, e) => sum + hours(e), 0),
   })).filter((x) => x.value > 0);
@@ -620,6 +805,7 @@ export default function App() {
     const fields = {
       course: row.course,
       description: row.description,
+      status: row.status,
       start_time: row.start_time,
       end_time: row.end_time,
     };
@@ -630,12 +816,12 @@ export default function App() {
             .update(fields)
             .eq("id", entry.id)
             .eq("user_id", authUser.id)
-            .select("id,user_id,course,description,start_time,end_time,created_at")
+            .select("id,user_id,course,description,start_time,end_time,created_at,status")
             .single()
         : await supabase
             .from("study_sessions")
             .insert(row)
-            .select("id,user_id,course,description,start_time,end_time,created_at")
+            .select("id,user_id,course,description,start_time,end_time,created_at,status")
             .single();
       if (result.error) {
         setCloudError(`Could not save study session: ${result.error.message}`);
@@ -740,6 +926,7 @@ export default function App() {
   };
   const signOut = async () => {
     if (!supabase) return;
+    if (workspaceSync.pending) { setCloudError("Wait for account changes to sync before signing out."); return; }
     setAuthActionLoading(true);
     try {
       const { error } = await supabase.auth.signOut();
@@ -756,64 +943,6 @@ export default function App() {
       );
     } finally {
       setAuthActionLoading(false);
-    }
-  };
-  const importLocalSessions = async () => {
-    if (!supabase || !authUser) {
-      setCloudError("Sign in with Google before importing local sessions.");
-      return;
-    }
-    setImportLoading(true);
-    setCloudError("");
-    try {
-      const { data: existingRows, error: existingError } = await supabase
-        .from("study_sessions")
-        .select("id,user_id,course,description,start_time,end_time,created_at")
-        .eq("user_id", authUser.id);
-      if (existingError)
-        throw new Error(`Could not check for duplicate sessions: ${existingError.message}`);
-      const seen = new Set(
-        ((existingRows || []) as StudySessionRow[]).map(sessionRowKey),
-      );
-      const uniqueLocalEntries = localImportCandidates.filter((entry) => {
-        const key = localEntryKey(entry);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-      if (uniqueLocalEntries.length === 0) {
-        localStorage.setItem(`studyday.imported.${authUser.id}`, "true");
-        setLocalImportDone(true);
-        setImportMessage("All local sessions already exist in Supabase.");
-        setImportConfirmOpen(false);
-        return;
-      }
-      const rows = uniqueLocalEntries.map((entry) =>
-        entryToSessionRow({ ...entry, id: crypto.randomUUID() }, authUser.id),
-      );
-      const { data: importedRows, error: importError } = await supabase
-        .from("study_sessions")
-        .insert(rows)
-        .select("id,user_id,course,description,start_time,end_time,created_at");
-      if (importError) throw new Error(importError.message);
-      const imported = ((importedRows || []) as StudySessionRow[]).map(
-        sessionRowToEntry,
-      );
-      sessionRevision.current += 1;
-      setEntries((current) => [...imported, ...current]);
-      localStorage.setItem(`studyday.imported.${authUser.id}`, "true");
-      setLocalImportDone(true);
-      setImportMessage(
-        `Imported ${imported.length} session${imported.length === 1 ? "" : "s"}. Your local copy was kept.`,
-      );
-      setCloudStatus("Synced");
-      setImportConfirmOpen(false);
-    } catch (error) {
-      setCloudError(
-        `Could not import local sessions: ${error instanceof Error ? error.message : "Network error."}`,
-      );
-    } finally {
-      setImportLoading(false);
     }
   };
   const saveCategory = async (event: React.FormEvent) => {
@@ -927,74 +1056,31 @@ export default function App() {
       event.target.value = "";
     }
   };
-  const submitWeek = () => {
-    if (draftEntries.length === 0) return;
-    setEntries((current) =>
-      current.map((entry) =>
-        entry.date >= iso(days[0]) &&
-        entry.date <= iso(days[6]) &&
-        entry.status !== "submitted"
-          ? { ...entry, status: "submitted" }
-          : entry,
-      ),
-    );
-  };
-  const stopTimer = async () => {
-    if (timerStarted === null) return;
-    const from = new Date(timerStarted),
-      to = new Date();
-    const d = iso(from);
-    if (iso(to) !== d) {
-      setTimerMessage("Timer crossed midnight. Enter this session manually.");
-      setTimerStarted(null);
-      return;
+  const submitWeek = async () => {
+    if (draftEntries.length === 0 || submittingWeek) return;
+    const ids = draftEntries.map((entry) => entry.id);
+    setSubmittingWeek(true);
+    try {
+      if (supabase) {
+        if (!authUser || !sessionsLoaded) throw new Error("Sign in and wait for your sessions to load.");
+        const { data, error } = await supabase.from("study_sessions")
+          .update({ status: "submitted" })
+          .eq("user_id", authUser.id)
+          .in("id", ids)
+          .select("id");
+        if (error) throw error;
+        if (data.length !== ids.length) throw new Error("Some sessions changed. Refresh and submit again.");
+      }
+      sessionRevision.current += 1;
+      setEntries((current) => current.map((entry) =>
+        ids.includes(entry.id) ? { ...entry, status: "submitted" } : entry,
+      ));
+      setCloudError("");
+    } catch (error) {
+      setCloudError(`Could not submit week: ${error instanceof Error ? error.message : "Network error."}`);
+    } finally {
+      setSubmittingWeek(false);
     }
-    if (minutes(hhmm(to)) <= minutes(hhmm(from))) {
-      setTimerMessage("Keep the timer running for at least one minute.");
-      return;
-    }
-    const saved = await saveStudySession(
-      {
-        id: crypto.randomUUID(),
-        date: d,
-        course,
-        start: hhmm(from),
-        end: hhmm(to),
-        notes: notes.trim() || "Timed study session",
-        status: "draft",
-      },
-      false,
-    );
-    if (!saved) return;
-    setTimerStarted(null);
-    setNotes("");
-    setTimerMessage("");
-    setWeek(monday(from));
-  };
-  const exportCsv = () => {
-    const rows = [
-      ["Date", "Course", "Start", "End", "Hours", "Notes", "Status"],
-      ...entries.map((e) => [
-        e.date,
-        e.course,
-        e.start,
-        e.end,
-        hours(e).toFixed(2),
-        e.notes,
-        e.status === "submitted" ? "Submitted" : "Draft",
-      ]),
-    ];
-    const csv = rows
-      .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
-      .join("\r\n");
-    const url = URL.createObjectURL(
-      new Blob([csv], { type: "text/csv;charset=utf-8" }),
-    );
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "studyday-entries.csv";
-    a.click();
-    URL.revokeObjectURL(url);
   };
   const fetchCalendar = async (token: string, currentWeek: Date) => {
     setCalendarLoading(true);
@@ -1014,7 +1100,17 @@ export default function App() {
         last.getDate(),
       ).toISOString();
       const headers = { Authorization: `Bearer ${token}` };
-      const calendars: Array<{ id: string; summary: string }> = [];
+      const calendars: Array<{ id: string; summary: string; backgroundColor?: string; foregroundColor?: string; colorId?: string; accessRole?: string }> = [];
+      let eventColors: Record<string, { background: string; foreground?: string }> = {};
+      let colorWarning = "";
+      try {
+        const response = await fetch("https://www.googleapis.com/calendar/v3/colors", { headers });
+        if (!response.ok) throw new Error("Could not load event color overrides.");
+        const colors = await response.json() as { event?: Record<string, { background: string; foreground?: string }> };
+        eventColors = colors.event || {};
+      } catch {
+        colorWarning = "Individual event colors could not be loaded; calendar colors are shown instead.";
+      }
       let calendarPageToken: string | undefined;
       do {
         const params = new URLSearchParams({ maxResults: "250" });
@@ -1030,13 +1126,18 @@ export default function App() {
               : `Could not list Google calendars (${response.status}).`,
           );
         const data = (await response.json()) as {
-          items?: Array<{ id: string; summary?: string }>;
+          items?: Array<{ id: string; summary?: string; backgroundColor?: string; foregroundColor?: string; colorId?: string; accessRole?: string }>;
           nextPageToken?: string;
         };
         calendars.push(
           ...(data.items || []).map((calendar) => ({
             id: calendar.id,
             summary: calendar.summary || calendar.id,
+            backgroundColor: googleCalendarBackground(calendar),
+            foregroundColor: calendar.colorId && GOOGLE_CALENDAR_PRESETS[calendar.colorId]
+              && calendar.backgroundColor?.toLowerCase() === GOOGLE_CALENDAR_PRESETS[calendar.colorId].api
+              ? "#ffffff" : calendar.foregroundColor,
+            accessRole: calendar.accessRole,
           })),
         );
         calendarPageToken = data.nextPageToken;
@@ -1069,6 +1170,9 @@ export default function App() {
                   start: { dateTime?: string; date?: string };
                   end: { dateTime?: string; date?: string };
                   htmlLink?: string;
+                  colorId?: string;
+                  etag?: string;
+                  recurringEventId?: string;
                 }>;
                 nextPageToken?: string;
               };
@@ -1087,6 +1191,16 @@ export default function App() {
                     allDay: Boolean(event.start.date),
                     htmlLink: event.htmlLink,
                     calendarName: calendar.summary,
+                    calendarId: calendar.id,
+                    eventId: event.id,
+                    etag: event.etag,
+                    recurring: Boolean(event.recurringEventId),
+                    seriesId: event.recurringEventId,
+                    editable: calendar.accessRole === "owner" || calendar.accessRole === "writer",
+                    color: (event.colorId && eventColors[event.colorId]?.background) || calendar.backgroundColor || "#f8e9e2",
+                    textColor: event.colorId && eventColors[event.colorId]
+                      ? eventColors[event.colorId].foreground || readableText(eventColors[event.colorId].background)
+                      : calendar.foregroundColor || readableText(calendar.backgroundColor || "#f8e9e2"),
                   })),
               );
               eventPageToken = data.nextPageToken;
@@ -1105,6 +1219,7 @@ export default function App() {
       );
       setEvents(results.flatMap((result) => result.events));
       const errors = results.map((result) => result.error).filter(Boolean);
+      if (colorWarning) errors.push(colorWarning);
       setCalendarError(
         errors.length
           ? `Some calendars could not be loaded: ${errors.slice(0, 3).join(", ")}`
@@ -1134,7 +1249,7 @@ export default function App() {
     }
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: clientId,
-      scope: "https://www.googleapis.com/auth/calendar.readonly",
+      scope: "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events",
       callback: (result) => {
         if (result.access_token) {
           setGoogleToken(result.access_token);
@@ -1145,10 +1260,46 @@ export default function App() {
     client.requestAccessToken({ prompt: "consent" });
   };
   const disconnectGoogle = () => {
+    setEditingGoogle(null);
     if (googleToken && window.google)
       window.google.accounts.oauth2.revoke(googleToken, () => {});
     setGoogleToken(null);
     setEvents([]);
+  };
+  const saveGoogleEvent = async (form: React.FormEvent) => {
+    form.preventDefault();
+    if (!editingGoogle || !googleToken || googleSaving || !editingGoogle.editable) return;
+    if (!googleDraft.title.trim() || !googleDraft.start || !googleDraft.end || googleDraft.end <= googleDraft.start) {
+      setGoogleSaveError("Enter a title and an end time after the start time."); return;
+    }
+    setGoogleSaving(true);
+    setGoogleSaveError("");
+    try {
+      const endpoint = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(editingGoogle.calendarId)}/events/${encodeURIComponent(editingGoogle.eventId)}?sendUpdates=all`;
+      const response = await fetch(endpoint, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${googleToken}`, "Content-Type": "application/json", ...(editingGoogle.etag ? { "If-Match": editingGoogle.etag } : {}) },
+        body: JSON.stringify({ summary: googleDraft.title.trim(),
+          start: editingGoogle.allDay ? { date: googleDraft.start } : { dateTime: new Date(googleDraft.start).toISOString() },
+          end: editingGoogle.allDay ? { date: googleDraft.end } : { dateTime: new Date(googleDraft.end).toISOString() },
+        }),
+      });
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) throw new Error("Reconnect Google Calendar to grant editing permission. You also need edit access to this calendar.");
+        if (response.status === 412) throw new Error("This event changed in Google Calendar. Close this editor, refresh, and try again.");
+        const detail = await response.json();
+        throw new Error(detail.error?.message || "Could not update Google Calendar.");
+      }
+      const updated = await response.json();
+      setEvents((current) => current.map((event) => event.id === editingGoogle.id ? { ...event,
+        summary: updated.summary, start: updated.start.dateTime || updated.start.date,
+        end: updated.end.dateTime || updated.end.date, etag: updated.etag,
+      } : event));
+      setEditingGoogle(null);
+      void fetchCalendar(googleToken, week);
+    } catch (error) {
+      setGoogleSaveError(error instanceof Error ? error.message : "Could not save this event.");
+    } finally { setGoogleSaving(false); }
   };
   const renderCalendarItem = (item: {
     id: string;
@@ -1157,6 +1308,7 @@ export default function App() {
     day: string;
     title: string;
     color?: string;
+    textColor?: string;
     kind: "study" | "google";
     status?: string;
     href?: string;
@@ -1177,50 +1329,49 @@ export default function App() {
     const visibleStart = Math.max(startMinute, GRID_START * 60);
     const visibleEnd = Math.min(endMinute, GRID_END * 60);
     if (visibleEnd <= visibleStart) return null;
+    const cardHeight = Math.max(28, ((visibleEnd - visibleStart) / 60) * HOUR_HEIGHT - 2);
+    const formatTime = (date: Date) => date.toLocaleTimeString("en-US", {
+      hour: "numeric", minute: date.getMinutes() ? "2-digit" : undefined,
+    }).replace(" AM", "am").replace(" PM", "pm");
+    const timeLabel = `${formatTime(iso(startDate) < item.day ? new Date(`${item.day}T00:00:00`) : startDate)}–${formatTime(endDate)}`;
+    const eventLabel = `${item.title} · ${timeLabel}${item.kind === "study" ? ` · ${item.status === "submitted" ? "Submitted" : "Draft"}` : ""}`;
     const style = {
       left: `calc(${(item.lane / item.laneCount) * 100}% + 3px)`,
       width: `calc(${Math.min(1.5 / item.laneCount, 1 - item.lane / item.laneCount) * 100}% - 6px)`,
       right: "auto",
       zIndex: 2 + item.lane,
       top: `${((visibleStart - GRID_START * 60) / 60) * HOUR_HEIGHT}px`,
-      height: `${Math.max(28, ((visibleEnd - visibleStart) / 60) * HOUR_HEIGHT - 2)}px`,
+      height: `${cardHeight}px`,
       ...(item.color
         ? {
-            backgroundColor: `color-mix(in srgb, ${item.color} 20%, white)`,
+            backgroundColor: item.color,
             borderLeftColor: item.color,
-            color: readableText(item.color),
+            color: item.textColor || readableText(item.color),
           }
         : {}),
     };
-    const className = `calendar-event ${item.kind === "study" ? "study-event" : "google-event"} ${item.status === "submitted" ? "is-submitted" : ""}`;
+    const className = `calendar-event ${item.kind === "study" ? "study-event" : "google-event"} ${item.status === "submitted" ? "is-submitted" : ""} ${cardHeight < 40 ? "event-compact" : ""}`;
     const content = (
       <>
         <b>{item.title}</b>
-        <span>
-          {(iso(startDate) < item.day
-            ? new Date(`${item.day}T00:00:00`)
-            : startDate
-          ).toLocaleTimeString("en-US", {
-            hour: "numeric",
-            minute: "2-digit",
-          })}
-          {" – "}
-          {endDate.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
-        </span>
-        {item.kind === "study" && (
-          <small>{item.status === "submitted" ? "Submitted" : "Draft"}</small>
+        {cardHeight >= 40 && <span className="event-time">{timeLabel}</span>}
+        {item.kind === "study" && cardHeight >= 56 && (
+          <small className="event-status">
+            {item.status === "submitted" && <Check size={9} aria-hidden="true" />}
+            {item.status === "submitted" ? "Submitted" : "Draft"}
+          </small>
         )}
       </>
     );
-    if (item.kind === "study" && item.onEdit)
+    if (item.onEdit)
       return (
         <button
           key={item.id}
           type="button"
           className={className}
           style={style}
-          title={`Edit ${item.title}`}
-          aria-label={`Edit ${item.title} entry`}
+          title={eventLabel}
+          aria-label={`Edit ${eventLabel}`}
           onClick={item.onEdit}
         >
           {content}
@@ -1234,23 +1385,26 @@ export default function App() {
         href={item.href}
         target="_blank"
         rel="noreferrer"
-        title={item.title}
+        title={eventLabel}
       >
         {content}
       </a>
     ) : (
-      <div key={item.id} className={className} style={style} title={item.title}>
+      <div key={item.id} className={className} style={style} title={eventLabel}>
         {content}
       </div>
     );
   };
+  const chartColor = bannerColor || palette.sidebar;
+  const chartGoalColor = `color-mix(in srgb, ${chartColor} 65%, #263247)`;
   const appStyle = {
     "--sidebar-bg": bannerColor || palette.sidebar,
     "--sidebar-fg": readableText(bannerColor || palette.sidebar),
     "--sidebar-active": `color-mix(in srgb, ${bannerColor || palette.sidebar} 80%, ${readableText(bannerColor || palette.sidebar)})`,
     "--sidebar-muted": `color-mix(in srgb, ${readableText(bannerColor || palette.sidebar)} 72%, transparent)`,
-    "--primary": palette.primary,
-    "--primary-hover": palette.primaryHover,
+    "--primary": bannerColor || palette.sidebar,
+    "--primary-text": readableText(bannerColor || palette.sidebar),
+    "--primary-hover": `color-mix(in srgb, ${bannerColor || palette.sidebar} 94%, ${readableText(bannerColor || palette.sidebar)})`,
     "--highlight": palette.highlight,
     "--logo-bg": "#ffffff",
     "--logo-fg": "#171b1e",
@@ -1265,17 +1419,44 @@ export default function App() {
     backgroundPosition: "center",
     backgroundAttachment: "fixed",
   } as React.CSSProperties;
+  if (supabase && !authUser) return (
+    <main className="welcome-page" style={{ "--logo-bg": "#ffffff", "--logo-fg": "#171b1e" } as React.CSSProperties}>
+      <div className="welcome-shell">
+        <header className="welcome-header">
+          <StudydayBrand />
+        </header>
+        <div className="welcome-body">
+          <section className="welcome-account" aria-labelledby="account-title">
+            <div className="welcome-tabs" aria-label="Account options">
+              <button type="button" aria-pressed={welcomeMode === "signin"} onClick={() => setWelcomeMode("signin")}>Sign in</button>
+              <button type="button" aria-pressed={welcomeMode === "signup"} onClick={() => setWelcomeMode("signup")}>Create account</button>
+            </div>
+            <h2 id="account-title">{welcomeMode === "signin" ? "Welcome to Studyday" : "Create your Studyday account"}</h2>
+            <p>Study hours tracked like work ones</p>
+            <button className="welcome-google" type="button" disabled={authLoading || authActionLoading} onClick={() => void signInWithGoogle()}>
+              <svg width="19" height="19" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.6 12.23c0-.71-.06-1.39-.18-2.05H12v3.88h5.38a4.6 4.6 0 0 1-2 3.02v2.51h3.24c1.9-1.75 2.98-4.33 2.98-7.36ZM12 22c2.7 0 4.96-.9 6.62-2.41l-3.24-2.51c-.9.6-2.05.96-3.38.96-2.6 0-4.8-1.76-5.59-4.13H3.06v2.6A10 10 0 0 0 12 22ZM6.41 13.91A6 6 0 0 1 6.1 12c0-.66.11-1.3.31-1.91v-2.6H3.06A10 10 0 0 0 2 12c0 1.61.39 3.14 1.06 4.51l3.35-2.6ZM12 5.96c1.47 0 2.79.51 3.83 1.51L18.7 4.6A9.6 9.6 0 0 0 12 2a10 10 0 0 0-8.94 5.49l3.35 2.6C7.2 7.72 9.4 5.96 12 5.96Z"/></svg>
+              {authLoading ? "Restoring your session…" : authActionLoading ? "Opening Google…" : "Continue with Google"}
+            </button>
+        {cloudError && <p className="error" role="alert">{cloudError}</p>}
+            <small>{welcomeMode === "signin" ? "Use the Google account you study with." : "Your Google account is all you need. No new password."}</small>
+
+          </section>
+        </div>
+        <footer className="welcome-footer">Your study sessions stay saved across devices.</footer>
+      </div>
+    </main>
+  );
+  if (supabase && authUser && !workspaceSync.ready) return <main className="welcome-page">
+    <StudydayBrand /><section className="panel" style={{ maxWidth: 600, margin: "60px auto" }}>
+      <h1>Loading your workspace</h1><p>{workspaceSync.error || workspaceSync.status}</p>
+      <button className="secondary" onClick={() => void signOut()}>Sign out</button>
+      {workspaceSync.error && <button className="secondary" onClick={workspaceSync.retry}>Retry account sync</button>}
+    </section>
+  </main>;
   return (
     <div className="app-shell" style={appStyle}>
       <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-icon">
-            <CalendarClock size={23} />
-          </span>
-          <span>
-            studyday<small>STUDY MANAGEMENT</small>
-          </span>
-        </div>
+        <StudydayBrand />
         <div className="sidebar-heading">WORKSPACE</div>
         <nav>
           <button
@@ -1291,10 +1472,16 @@ export default function App() {
             <ChartColumn size={18} /> Analytics
           </button>
           <button
-            className={view === "history" ? "active" : ""}
-            onClick={() => setView("history")}
+            className={view === "tasks" ? "active" : ""}
+            onClick={() => setView("tasks")}
           >
-            <BookOpen size={18} /> All entries
+            <BookOpen size={18} /> To-do
+          </button>
+          <button className={view === "appearance" ? "active" : ""} onClick={() => {
+            setAppearanceError("");
+            setView("appearance");
+          }}>
+            <Palette size={18} /> Appearance
           </button>
         </nav>
         <div className="sidebar-bottom">
@@ -1306,7 +1493,7 @@ export default function App() {
               : "Local-only mode"}
           <small>
             {authUser
-              ? "Goals, categories and appearance stay local"
+              ? "Account settings sync across devices"
               : cloudStatus ||
                 (supabase ? "Sign in to sync sessions" : "Supabase is not configured")}
           </small>
@@ -1320,14 +1507,14 @@ export default function App() {
                 ? "Study Planner"
                 : view === "analytics"
                   ? "Study Analytics"
-                  : "Study History"}
+                  : view === "appearance" ? "Appearance" : "To-do"}
             </h1>
             <p>
               {view === "timesheet"
-                ? "Schedule sessions, track your hours, and submit your week."
+                ? "Schedule sessions, track your hours, and submit your week because your hours studying count too."
                 : view === "analytics"
                   ? "See where your study time goes."
-                  : "Review and export your study sessions."}
+                  : view === "appearance" ? "Choose your wallpaper, banner color, and saved appearances." : "Keep track of what you want to get done."}
             </p>
           </div>
           <div className="top-actions">
@@ -1335,7 +1522,7 @@ export default function App() {
               <button
                 className="secondary small"
                 onClick={() => void signOut()}
-                disabled={authActionLoading}
+                disabled={authActionLoading || workspaceSync.pending}
               >
                 <LogOut size={14} /> {authActionLoading ? "Signing out…" : "Sign out"}
               </button>
@@ -1355,26 +1542,13 @@ export default function App() {
                       : "Sign in with Google"}
               </button>
             )}
-            {authUser && localImportCandidates.length > 0 && !localImportDone && (
-              <button
-                className="secondary small"
-                onClick={() => {
-                  setImportMessage("");
-                  setImportConfirmOpen(true);
-                }}
-              >
-                <Download size={14} /> Import local sessions
-              </button>
-            )}
-            <button className="secondary" onClick={exportCsv}>
-              <Download size={16} /> Export CSV
-            </button>
           </div>
         </header>
+        <div className="workspace-sync-status" role="status">{workspaceSync.status}</div>
+        {workspaceSync.error && <p className="error" role="alert">{workspaceSync.error} <button className="secondary small" onClick={workspaceSync.retry}>Retry sync</button></p>}
         {cloudError && <p className="error cloud-error" role="alert">{cloudError}</p>}
         {sessionsLoading && <p className="helper cloud-message" role="status">Loading your Supabase sessions…</p>}
-        {importMessage && <p className="helper cloud-message" role="status">{importMessage}</p>}
-        {view !== "timesheet" && <section className="stats">
+        {view === "analytics" && <section className="stats">
           <div className="stat">
             <span>HOURS THIS WEEK</span>
             <strong>{formatHours(total)}</strong>
@@ -1466,27 +1640,26 @@ export default function App() {
                       >
                         <LogOut size={14} /> Disconnect
                       </button>
+
+                      {!useGoogleColors && <button className="secondary small" type="button"
+                        onClick={() => { setUseGoogleColors(true); setGoogleColorOverrides({}); }}>Use Google colors</button>}
+
                     </>
                   ) : (
                     <button className="secondary small" onClick={connectGoogle}>
                       <CalendarDays size={14} /> Connect Google Calendar
                     </button>
                   )}
+                  <button className="secondary small" type="button" onClick={() => setCalendarThemesOpen(true)}>
+                    <Palette size={14} /> Theme
+                  </button>
                   <button
                     className="secondary small"
                     onClick={() => setCategoryManagerOpen(true)}
                   >
                     <Tags size={14} /> Categories
                   </button>
-                  <button
-                    className="secondary small"
-                    onClick={() => {
-                      setAppearanceError("");
-                      setAppearanceOpen(true);
-                    }}
-                  >
-                    <Palette size={14} /> Appearance
-                  </button>
+
                 </div>
               </div>
               {calendarError && <p className="error">{calendarError}</p>}
@@ -1527,6 +1700,8 @@ export default function App() {
                         <a
                           key={event.id}
                           className="all-day-event"
+                          onClick={(click) => { click.preventDefault(); openGoogleEditor(event); }}
+                          style={googleAppearance(event)}
                           href={event.htmlLink || "https://calendar.google.com"}
                           target="_blank"
                           rel="noreferrer"
@@ -1582,7 +1757,10 @@ export default function App() {
                           day: key,
                           title: event.summary,
                           kind: "google" as const,
+                          color: googleAppearance(event).backgroundColor,
+                          textColor: googleAppearance(event).color,
                           href: event.htmlLink,
+                          onEdit: () => openGoogleEditor(event),
                         }))
                     : [];
                   return (
@@ -1603,17 +1781,6 @@ export default function App() {
                 })}
               </div>
               </div>
-              <div className="calendar-legend">
-                <span>
-                  <i className="legend-study" /> Study entry
-                </span>
-                <span>
-                  <i className="legend-submitted" /> Submitted locally
-                </span>
-                <span>
-                  <i className="legend-google" /> Google Calendar
-                </span>
-              </div>
               <div className="submit-bar">
                 <div>
                   <strong>
@@ -1629,16 +1796,17 @@ export default function App() {
                 </div>
                 <button
                   className="primary"
-                  disabled={draftEntries.length === 0}
-                  onClick={submitWeek}
+                  disabled={draftEntries.length === 0 || submittingWeek || Boolean(supabase && !sessionsLoaded)}
+                  onClick={() => void submitWeek()}
                 >
-                  <Check size={16} /> Submit week
+                  <Check size={16} /> {submittingWeek ? "Submitting…" : "Submit week"}
                 </button>
               </div>
               <p className="submission-note">
-                Submission status is temporary; the Supabase table has no status column and this does not send hours to Workday.
+                Submitted sessions stay saved to your account. This does not send hours to Workday.
               </p>
             </section>
+            <div className="schedule-sidebar">
             <aside className="panel summary-panel">
               <div className="summary-heading">
                 <h2>Summary</h2>
@@ -1668,91 +1836,21 @@ export default function App() {
                 <div className="summary-total"><dt>Total hours</dt><dd>{formatHours(total)}</dd></div>
               </dl>
             </aside>
+            <InspirationNote key={authUser?.id || "local"}
+              note={inspirationNote} setNote={setInspirationNote}
+              background={bannerColor || palette.sidebar} />
             </div>
-            <div className="bottom-grid">
-              <section className="panel timer-panel">
-                <div className="panel-heading">
-                  <div>
-                    <h2>Focus timer</h2>
-                    <p>Track a session as you study</p>
-                  </div>
-                  <Timer size={20} />
-                </div>
-                <div className="timer-face">
-                  {timerStarted === null
-                    ? "00:00:00"
-                    : new Date(timerNow - timerStarted)
-                        .toISOString()
-                        .slice(11, 19)}
-                </div>
-                <p
-                  className={`timer-hint ${timerMessage ? "timer-error" : ""}`}
-                  role="status"
-                  aria-live="polite"
-                >
-                  {timerMessage || "Saved study sessions are added to the calendar as drafts."}
-                </p>
-                <button
-                  className={
-                    timerStarted === null
-                      ? "primary timer-button"
-                      : "danger timer-button"
-                  }
-                  onClick={() => {
-                    if (timerStarted === null) {
-                      setTimerMessage("");
-                      setTimerStarted(Date.now());
-                      setTimerNow(Date.now());
-                    } else stopTimer();
-                  }}
-                >
-                  {timerStarted === null ? (
-                    <>
-                      <Play size={16} /> Start studying
-                    </>
-                  ) : (
-                    <>
-                      <Square size={16} /> Stop & save draft
-                    </>
-                  )}
-                </button>
-              </section>
-              <section className="panel week-summary">
-                <div className="panel-heading">
-                  <div>
-                    <h2>This week</h2>
-                    <p>Study time by day</p>
-                  </div>
-                </div>
-                {days.map((day) => {
-                  const key = iso(day);
-                  const dayTotal = weekEntries
-                    .filter((entry) => entry.date === key)
-                    .reduce((sum, entry) => sum + hours(entry), 0);
-                  return (
-                    <div className="summary-row" key={key}>
-                      <span>
-                        {day.toLocaleDateString("en-US", {
-                          weekday: "short",
-                          month: "short",
-                          day: "numeric",
-                        })}
-                      </span>
-                      <div className="bar-bg">
-                        <div
-                          style={{
-                            width: `${Math.min(100, (dayTotal / Math.max(1, total)) * 100)}%`,
-                          }}
-                        />
-                      </div>
-                      <b>{formatHours(dayTotal)}</b>
-                    </div>
-                  );
-                })}
-              </section>
             </div>
           </>
         )}
+        <div className="focus-section" hidden={view !== "timesheet"}>
+          <FocusTimer key={authUser?.id || "local"} categories={categories} preferences={focusPreferences} onPreferencesChange={setFocusPreferences} onSave={async (start, end, timerCourse) => {
+            const saved = await saveStudySession({ id: crypto.randomUUID(), date: iso(start), course: timerCourse,
+              start: hhmm(start), end: hhmm(end), notes: "Timed study session", status: "draft" }, false);
+            if (saved) setWeek(monday(start));
+            return saved;
+          }} />
+        </div>
         {view === "analytics" && (
           <div className="analytics-grid">
             <section className="panel progress-chart-panel">
@@ -1770,14 +1868,14 @@ export default function App() {
                     <XAxis dataKey="day" tickLine={false} axisLine={false} />
                     <YAxis tickLine={false} axisLine={false} width={34} />
                     <Tooltip formatter={(value) => `${Number(value).toFixed(1)}h`} />
-                    <Bar dataKey="actual" name="Study hours" fill={palette.primary} radius={[4, 4, 0, 0]} />
-                    <Line type="monotone" dataKey="target" name="Daily goal" stroke={palette.highlight} strokeWidth={2} strokeDasharray="5 5" dot={false} />
+                    <Bar dataKey="actual" name="Study hours" fill={chartColor} radius={[4, 4, 0, 0]} />
+                    <Line type="monotone" dataKey="target" name="Daily goal" stroke={chartGoalColor} strokeWidth={2} strokeDasharray="5 5" dot={false} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
               <div className="chart-key">
-                <span><i className="key-actual" style={{ background: palette.primary }} /> Study hours</span>
-                <span><i className="key-target" style={{ background: palette.highlight }} /> Daily goal</span>
+                <span><i className="key-actual" style={{ background: chartColor }} /> Study hours</span>
+                <span><i className="key-target" style={{ background: chartGoalColor }} /> Daily goal</span>
               </div>
             </section>
             <div className="analytics-side">
@@ -1785,11 +1883,29 @@ export default function App() {
                 <div className="panel-heading">
                   <div>
                     <h2>Hours by category</h2>
-                    <p>Time recorded in each study category</p>
+                    <p>{categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : `${days[0].toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${days[6].toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`}</p>
                   </div>
                 </div>
+                <div className="category-chart-controls">
+                  <div role="group" aria-label="Category chart period">
+                    {(["day", "week"] as const).map((range) => <button key={range} type="button" aria-pressed={categoryRange === range} className={categoryRange === range ? "primary small" : "secondary small"} onClick={() => setCategoryRange(range)}>{range === "day" ? "Day" : "Week"}</button>)}
+                  </div>
+                  <button className="icon-button" aria-label={`Previous ${categoryRange}`} onClick={() => {
+                    if (categoryRange === "week") moveWeek(-1);
+                    else { const day = dateFrom(categoryDay); day.setDate(day.getDate() - 1); setCategoryDay(iso(day)); }
+                  }}><ChevronLeft size={16} /></button>
+                  <input type="date" aria-label={categoryRange === "day" ? "Day to show category hours" : "Choose a week for category hours"} value={categoryRange === "day" ? categoryDay : iso(week)} onChange={(event) => {
+                    if (!event.target.value) return;
+                    if (categoryRange === "day") setCategoryDay(event.target.value);
+                    else setWeek(monday(dateFrom(event.target.value)));
+                  }} />
+                  <button className="icon-button" aria-label={`Next ${categoryRange}`} onClick={() => {
+                    if (categoryRange === "week") moveWeek(1);
+                    else { const day = dateFrom(categoryDay); day.setDate(day.getDate() + 1); setCategoryDay(iso(day)); }
+                  }}><ChevronRight size={16} /></button>
+                </div>
                 {grouped.length === 0 ? (
-                  <p className="empty">No study time recorded this week.</p>
+                  <p className="empty">No study time recorded {categoryRange === "day" ? "on this day" : "this week"}.</p>
                 ) : (
                   <div className="category-chart-frame">
                     <ResponsiveContainer width="100%" height={Math.max(190, grouped.length * 40)}>
@@ -1868,88 +1984,259 @@ export default function App() {
             </div>
           </div>
         )}
-        {view === "history" && (
-          <section className="panel">
-            <div className="panel-heading">
-              <div>
-                <h2>All study entries</h2>
-                <p>{entries.length} saved sessions</p>
+        {view === "tasks" && <StudyTasks key={authUser?.id || "local"} data={taskData} setData={setTaskData} />}
+        {view === "appearance" && <section className="panel appearance-page" aria-label="Appearance settings">
+            <fieldset className="theme-fieldset">
+              <legend>Color scheme</legend>
+              <div className="theme-options">
+                {Object.entries(THEMES).map(([key, option]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`theme-option ${theme === key ? "selected" : ""}`}
+                    aria-pressed={theme === key}
+                    onClick={() => {
+                      setTheme(key as ThemeName); setWallpaper(""); setBannerColor("");
+                      setBannerColorInput(option.sidebar); setEditingAppearanceId(null); setAppearanceName("");
+                    }}
+                  >
+                    <span
+                      className="theme-swatch"
+                      style={{
+                        backgroundColor: option.sidebar,
+                        backgroundImage: `linear-gradient(rgba(18, 30, 34, .28), rgba(18, 30, 34, .28)), url("${option.background}")`,
+                      }}
+                    >
+                      <i style={{ background: option.primary }} />
+                      <i style={{ background: option.highlight }} />
+                    </span>
+                    <span>{option.label}</span>
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+            <div className="banner-color-controls">
+              <label htmlFor="banner-color">Sidebar/banner color</label>
+              <div className="banner-color-input-row">
+                <input
+                  id="banner-color"
+                  type="color"
+                  value={bannerColor || palette.sidebar}
+                  onChange={(event) => {
+                    setBannerColor(event.target.value);
+                    setBannerColorInput(event.target.value);
+                  }}
+                  aria-label="Choose any banner color"
+                />
+                <input
+                  className="banner-hex-input"
+                  type="text"
+                  value={bannerColorInput}
+                  maxLength={7}
+                  aria-label="Banner color hex code"
+                  placeholder="#RRGGBB"
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setBannerColorInput(value);
+                    if (/^#[0-9a-fA-F]{6}$/.test(value))
+                      setBannerColor(value.toLowerCase());
+                  }}
+                  onBlur={() => {
+                    if (!/^#[0-9a-fA-F]{6}$/.test(bannerColorInput))
+                      setBannerColorInput(bannerColor || palette.sidebar);
+                  }}
+                />
+                <button
+                  className="secondary small"
+                  type="button"
+                  disabled={!bannerColor}
+                  onClick={() => setBannerColor("")}
+                >
+                  Use theme color
+                </button>
               </div>
             </div>
-            {entries.length === 0 ? (
-              <p className="empty">
-                Nothing logged yet. Go to Timesheet to add your first session.
-              </p>
-            ) : (
-              <div className="table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Course</th>
-                      <th>Time</th>
-                      <th>Hours</th>
-                      <th>Status</th>
-                      <th>Notes</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {entries.map((e) => (
-                      <tr key={e.id}>
-                        <td>{e.date}</td>
-                        <td>{e.course}</td>
-                        <td>
-                          {e.start}–{e.end}
-                        </td>
-                        <td>{formatHours(hours(e))}</td>
-                        <td>
-                          <span
-                            className={`status-tag ${e.status === "submitted" ? "submitted" : ""}`}
-                          >
-                            {e.status === "submitted" ? "Submitted" : "Draft"}
-                          </span>
-                        </td>
-                        <td>{e.notes || "—"}</td>
-                        <td>
-                          <div className="row-actions">
-                            <button
-                              className="icon-button"
-                              title="Edit entry"
-                              aria-label={`Edit ${e.course} entry`}
-                              onClick={() => openEditEntry(e)}
-                            >
-                              <Pencil size={15} />
-                            </button>
-                            <button
-                              className="icon-button"
-                              title="Delete entry"
-                              aria-label={`Delete ${e.course} entry`}
-                              onClick={() => deleteEntry(e.id)}
-                            >
-                              <Trash2 size={15} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div className="wallpaper-controls">
+              <label htmlFor="wallpaper-file">Wallpaper</label>
+              <input
+                id="wallpaper-file"
+                type="file"
+                accept="image/*"
+                onChange={uploadWallpaper}
+              />
+              <p className="helper">Saved to your account. Images are resized before saving.</p>
+              <div className="wallpaper-tint-control">
+                <label htmlFor="wallpaper-banner-color">Wallpaper banner color</label>
+                <div className="wallpaper-tint-row">
+                  <ColorField id="wallpaper-banner-color" label="Wallpaper banner color"
+                    value={bannerColor || palette.sidebar}
+                    onChange={(color) => { setBannerColor(color); setBannerColorInput(color); }} />
+                </div>
+                <label htmlFor="wallpaper-overlay">Wallpaper overlay strength</label>
+                <div className="wallpaper-tint-row">
+                  <input
+                    id="wallpaper-overlay"
+                    type="range"
+                    min="10"
+                    max="95"
+                    step="5"
+                    value={wallpaperTintStrength}
+                    onChange={(event) =>
+                      setWallpaperTintStrength(Number(event.target.value))
+                    }
+                    aria-label="Wallpaper tint strength"
+                  />
+                  <output>{wallpaperTintStrength}%</output>
+                </div>
               </div>
-            )}
-          </section>
-        )}
+              {wallpaper && (
+                <button
+                  className="secondary small"
+                  onClick={() => {
+                    setWallpaper("");
+                    setAppearanceError("");
+                  }}
+                >
+                  Remove wallpaper
+                </button>
+              )}
+              <div className="saved-appearance-section">
+                <h3>{editingAppearanceId ? "Edit saved appearance" : "Save this appearance"}</h3>
+                <p className="helper">Saves the wallpaper, banner color, and overlay together to your account.</p>
+                <form className="calendar-theme-save" onSubmit={saveCurrentAppearance}>
+                  <input aria-label="Appearance theme name" placeholder="Name this appearance" maxLength={40} value={appearanceName} onChange={(event) => setAppearanceName(event.target.value)} />
+                  <button className="primary small" disabled={appearanceBusy || !appearancesLoaded} type="submit">{appearanceBusy ? "Saving…" : editingAppearanceId ? "Save changes" : "Save appearance"}</button>
+                  {editingAppearanceId && <button className="secondary small" type="button" onClick={() => { setEditingAppearanceId(null); setAppearanceName(""); }}>Done editing</button>}
+                </form>
+                {savedAppearances.length > 0 && <h3>Your appearances</h3>}
+                {savedAppearances.map((item) => <div className="saved-appearance-row" key={item.id}>
+                  <button type="button" className="secondary saved-appearance-apply" onClick={() => { applyAppearance(item); setEditingAppearanceId(null); setAppearanceName(""); }}>
+                    <span className="saved-appearance-preview" aria-hidden="true" style={{ backgroundImage: `url("${item.wallpaper || THEMES[item.theme].background}")` }}><i style={{ backgroundColor: item.bannerColor }} /></span>
+                    {item.name}
+                  </button>
+                  <button className="icon-button" type="button" disabled={appearanceBusy} aria-label={`Edit ${item.name} appearance`} onClick={() => { applyAppearance(item); setEditingAppearanceId(item.id); setAppearanceName(item.name); setAppearanceError(""); }}><Pencil size={15} /></button>
+                  <button className="icon-button" type="button" disabled={appearanceBusy} aria-label={`Delete ${item.name} appearance`} onClick={() => void removeAppearance(item.id)}><Trash2 size={15} /></button>
+                </div>)}
+              </div>
+              {appearanceError && <p className="error" role="alert">{appearanceError}</p>}
+            </div>
+        </section>}
         <footer>
           Studyday
           <span>
             {authUser
-              ? "Study sessions sync to Supabase · Goals, categories and appearance stay local"
+              ? "Study sessions, tasks, notes, and settings sync to your account"
               : supabase
-                ? "Sign in to sync sessions · Local sessions remain available for import"
+                ? "Sign in to sync sessions"
                 : "Sessions saved in this browser · Supabase is not configured"}
           </span>
         </footer>
       </main>
+      {calendarThemesOpen && <div className="modal-backdrop">
+        <section className="entry-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-theme-title">
+          <div className="modal-heading"><div><span className="eyebrow">STUDYDAY COLORS</span><h2 id="calendar-theme-title">Calendar themes</h2></div>
+            <button className="icon-button" aria-label="Close calendar themes" onClick={() => setCalendarThemesOpen(false)}><X size={18} /></button>
+          </div>
+          <p className="helper">Themes color your study entries, categories, analytics, and Google events together. Each Google event series gets its own color. Recurring occurrences keep the same color across weeks. Applying a theme replaces local event color overrides; Google Calendar stays unchanged.</p>
+          <div className="category-theme-options">
+            <button className="secondary small" type="button" onClick={() => { setUseGoogleColors(true); setGoogleColorOverrides({}); }}>Use Google colors</button>
+            {Object.entries(CATEGORY_THEMES).map(([id, option]) => <button type="button" className="secondary category-theme-option" key={id} onClick={() => applyCalendarTheme(option.colors)}>
+              {option.label}<span className="category-theme-swatches" aria-hidden="true">{option.colors.map((color) => <i key={color} style={{ backgroundColor: color }} />)}</span>
+            </button>)}
+          </div>
+          <h3 className="calendar-theme-section">{editingThemeId ? "Edit saved theme" : "Make your own"}</h3>
+          <div className="calendar-palette-editor">{(editingThemeId ? editingThemeColors : calendarPalette).map((color, index) => <ColorField key={index} value={color} label={`Theme color ${index + 1}`} onChange={(nextColor) => {
+            if (editingThemeId) {
+              setEditingThemeColors((current) => current.map((value, slot) => slot === index ? nextColor : value));
+            } else {
+              applyCalendarTheme(calendarPalette.map((value, slot) => slot === index ? nextColor : value));
+            }
+          }} />)}</div>
+          <form className="calendar-theme-save" onSubmit={(event) => {
+            event.preventDefault(); const label = calendarThemeName.trim();
+            if (!label) { setCalendarThemeError("Give your theme a name."); return; }
+            if (savedCalendarThemes.some((theme) => theme.id !== editingThemeId && theme.label.toLowerCase() === label.toLowerCase())) { setCalendarThemeError("Choose a different name for this theme."); return; }
+            if (editingThemeId) {
+              const original = savedCalendarThemes.find((theme) => theme.id === editingThemeId);
+              if (!original) { setCalendarThemeError("This theme no longer exists."); return; }
+              const updated = { ...original, label, colors: [...editingThemeColors],
+                categoryColors: Object.fromEntries(Object.entries(original.categoryColors || {}).map(([name, color]) => {
+                  const slot = original.colors.indexOf(color);
+                  return [name, slot >= 0 ? editingThemeColors[slot] : color];
+                })),
+              };
+              setSavedCalendarThemes((current) => current.map((theme) => theme.id === editingThemeId ? updated : theme));
+              applyCalendarTheme(updated.colors, updated.overrides, updated.categoryColors);
+            } else {
+              setSavedCalendarThemes((current) => [...current, { id: crypto.randomUUID(), label, colors: [...calendarPalette], overrides: { ...googleColorOverrides }, categoryColors: { ...categoryColors } }]);
+            }
+            setEditingThemeId(null); setCalendarThemeName(""); setCalendarThemeError("");
+          }}>
+            <input aria-label="Theme name" placeholder="Name your theme" maxLength={40} value={calendarThemeName} onChange={(event) => setCalendarThemeName(event.target.value)} />
+            <button className="primary small" type="submit">{editingThemeId ? "Save changes" : "Save theme"}</button>
+            {editingThemeId && <button className="secondary small" type="button" onClick={() => { setEditingThemeId(null); setCalendarThemeName(""); setCalendarThemeError(""); }}>Cancel</button>}
+          </form>
+          {calendarThemeError && <p className="error" role="alert">{calendarThemeError}</p>}
+          <p className="helper">Saves this palette, category colors, and individual event colors to your account.</p>
+          {savedCalendarThemes.length > 0 && <><h3 className="calendar-theme-section">Your themes</h3>
+            {savedCalendarThemes.map((theme) => <div className="calendar-saved-theme" key={theme.id}>
+              <button className="secondary category-theme-option" type="button" onClick={() => applyCalendarTheme(theme.colors, theme.overrides, theme.categoryColors)}>{theme.label}
+                <span className="category-theme-swatches" aria-hidden="true">{theme.colors.map((color, index) => <i key={index} style={{ backgroundColor: color }} />)}</span>
+              </button>
+              <button className="icon-button" type="button" aria-label={`Edit ${theme.label} theme`} title="Edit theme" onClick={() => {
+                setEditingThemeId(theme.id); setCalendarThemeName(theme.label); setEditingThemeColors([...theme.colors]); setCalendarThemeError("");
+              }}><Pencil size={15} /></button>
+              <button className="icon-button" type="button" aria-label={`Delete ${theme.label} theme`} onClick={() => {
+                setSavedCalendarThemes((current) => current.filter((item) => item.id !== theme.id));
+                if (editingThemeId === theme.id) { setEditingThemeId(null); setCalendarThemeName(""); setCalendarThemeError(""); }
+              }}><Trash2 size={15} /></button>
+            </div>)}
+          </>}
+        </section>
+      </div>}
+      {editingGoogle && <div className="modal-backdrop">
+        <section className="entry-modal" role="dialog" aria-modal="true" aria-labelledby="google-edit-title">
+          <div className="modal-heading"><div><span className="eyebrow">{editingGoogle.calendarName}</span><h2 id="google-edit-title">Edit Google Calendar event</h2></div>
+            <button className="icon-button" disabled={googleSaving} onClick={() => setEditingGoogle(null)} aria-label="Close Google event editor"><X size={18} /></button>
+          </div>
+          <div className="google-local-color">
+            <label htmlFor="google-series-color">Color in Studyday</label>
+            <div className="google-local-color-controls">
+              <ColorField id="google-series-color" label="Event color" value={googleAppearance(editingGoogle).backgroundColor}
+                onChange={(color) => setGoogleColorOverrides((current) => ({ ...current, [googleColorKey(editingGoogle)]: color }))} />
+              <button type="button" className="secondary small"
+                onClick={() => setGoogleColorOverrides((current) => ({ ...current, [googleColorKey(editingGoogle)]: "google" }))}>Use Google color</button>
+            </div>
+            {usedEventColors.length > 0 && <div className="used-event-colors">
+              <span>Colors already in use</span>
+              <div className="used-event-swatches" role="group" aria-label="Colors used by other events">
+                {usedEventColors.map((color) => {
+                  const selected = googleAppearance(editingGoogle).backgroundColor.toLowerCase() === color;
+                  return <button key={color} type="button" aria-label={`Use event color ${color}`} aria-pressed={selected}
+                    title={color.toUpperCase()} style={{ backgroundColor: color, color: readableText(color) }}
+                    onClick={() => setGoogleColorOverrides((current) => ({ ...current, [googleColorKey(editingGoogle)]: color }))}>
+                    {selected && <Check size={15} aria-hidden="true" />}
+                  </button>;
+                })}
+              </div>
+            </div>}
+            <p className="helper">{editingGoogle.recurring ? "Applies to every occurrence in this series." : "Applies to this event."} Color changes sync automatically to your account and do not change Google Calendar.</p>
+          </div>
+          <form onSubmit={saveGoogleEvent}>
+            <fieldset disabled={googleSaving || !editingGoogle.editable} style={{ border: 0, padding: 0, margin: 0 }}>
+              <div className="field"><label htmlFor="google-event-title">Title</label><input id="google-event-title" required value={googleDraft.title} onChange={(event) => setGoogleDraft((current) => ({ ...current, title: event.target.value }))} /></div>
+              <div className="field"><label htmlFor="google-event-start">Start</label><input id="google-event-start" required type={editingGoogle.allDay ? "date" : "datetime-local"} value={googleDraft.start} onChange={(event) => setGoogleDraft((current) => ({ ...current, start: event.target.value }))} /></div>
+              <div className="field"><label htmlFor="google-event-end">{editingGoogle.allDay ? "End date (exclusive)" : "End"}</label><input id="google-event-end" required type={editingGoogle.allDay ? "date" : "datetime-local"} value={googleDraft.end} onChange={(event) => setGoogleDraft((current) => ({ ...current, end: event.target.value }))} /></div>
+            </fieldset>
+            <p className="helper">{editingGoogle.editable ? "Saves directly to Google Calendar. Guests will be notified of updates." : "You have read-only access to this calendar."}{editingGoogle.recurring ? " Only this occurrence will change." : ""}</p>
+            {googleSaveError && <p className="error" role="alert">{googleSaveError}</p>}
+            <div className="form-footer">
+              {editingGoogle.htmlLink && <a href={editingGoogle.htmlLink} target="_blank" rel="noreferrer">Open in Google Calendar</a>}
+              <button className="primary" type="submit" disabled={googleSaving || !editingGoogle.editable}>{googleSaving ? "Saving…" : "Save to Google Calendar"}</button>
+            </div>
+          </form>
+        </section>
+      </div>}
       {showEntryForm && (
         <div
           className="modal-backdrop"
@@ -2100,6 +2387,30 @@ export default function App() {
                 <X size={18} />
               </button>
             </div>
+            <div className="category-theme-controls">
+              <button className="secondary small" type="button"
+                aria-expanded={categoryThemesOpen} aria-controls="category-theme-options"
+                onClick={() => setCategoryThemesOpen((open) => !open)}>
+                <Palette size={14} /> Category theme
+              </button>
+              {categoryThemesOpen && <div id="category-theme-options" className="category-theme-options">
+                <p className="helper">Apply colors to all categories and Google Calendar events. You can still change individual colors.</p>
+                {Object.entries(CATEGORY_THEMES).map(([key, option]) => (
+                  <button className="secondary category-theme-option" type="button" key={key}
+                    onClick={() => {
+                      setCategoryColors((current) => ({ ...current,
+                        ...Object.fromEntries(categories.map((category, index) => [category, option.colors[index % option.colors.length]])),
+                      }));
+                      applyCalendarTheme(option.colors);
+                    }}>
+                    {option.label}
+                    <span className="category-theme-swatches" aria-hidden="true">
+                      {option.colors.map((color) => <i key={color} style={{ backgroundColor: color }} />)}
+                    </span>
+                  </button>
+                ))}
+              </div>}
+            </div>
             <form className="category-create-form" onSubmit={saveCategory}>
               <label htmlFor="new-category">New category</label>
               <div className="category-create-controls">
@@ -2151,22 +2462,9 @@ export default function App() {
                     <>
                       <span className="category-name">{category}</span>
                       <div className="category-actions">
-                        <input
-                          className="category-color-input"
-                          type="color"
-                          value={
-                            categoryColors[category] ||
-                            COLORS[categories.indexOf(category) % COLORS.length]
-                          }
-                          aria-label={`Choose ${category} tag color`}
-                          title={`Choose ${category} tag color`}
-                          onChange={(event) =>
-                            setCategoryColors((current) => ({
-                              ...current,
-                              [category]: event.target.value,
-                            }))
-                          }
-                        />
+                        <ColorField label={`${category} color`}
+                          value={categoryColors[category] || COLORS[categories.indexOf(category) % COLORS.length]}
+                          onChange={(color) => setCategoryColors((current) => ({ ...current, [category]: color }))} />
                         <button
                           className="icon-button"
                           title={`Rename ${category}`}
@@ -2196,201 +2494,8 @@ export default function App() {
           </section>
         </div>
       )}
-      {appearanceOpen && (
-        <div
-          className="modal-backdrop appearance-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setAppearanceOpen(false);
-          }}
-        >
-          <section
-            className="entry-modal appearance-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="appearance-title"
-          >
-            <div className="modal-heading">
-              <div>
-                <span className="eyebrow">MAKE IT YOURS</span>
-                <h2 id="appearance-title">Appearance</h2>
-              </div>
-              <button
-                className="icon-button"
-                aria-label="Close appearance settings"
-                onClick={() => setAppearanceOpen(false)}
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <fieldset className="theme-fieldset">
-              <legend>Color scheme</legend>
-              <div className="theme-options">
-                {Object.entries(THEMES).map(([key, option]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    className={`theme-option ${theme === key ? "selected" : ""}`}
-                    aria-pressed={theme === key}
-                    onClick={() => setTheme(key as ThemeName)}
-                  >
-                    <span
-                      className="theme-swatch"
-                      style={{
-                        backgroundColor: option.sidebar,
-                        backgroundImage: `linear-gradient(rgba(18, 30, 34, .28), rgba(18, 30, 34, .28)), url("${option.background}")`,
-                      }}
-                    >
-                      <i style={{ background: option.primary }} />
-                      <i style={{ background: option.highlight }} />
-                    </span>
-                    <span>{option.label}</span>
-                  </button>
-                ))}
-              </div>
-            </fieldset>
-            <div className="banner-color-controls">
-              <label htmlFor="banner-color">Sidebar/banner color</label>
-              <div className="banner-color-input-row">
-                <input
-                  id="banner-color"
-                  type="color"
-                  value={bannerColor || palette.sidebar}
-                  onChange={(event) => {
-                    setBannerColor(event.target.value);
-                    setBannerColorInput(event.target.value);
-                  }}
-                  aria-label="Choose any banner color"
-                />
-                <input
-                  className="banner-hex-input"
-                  type="text"
-                  value={bannerColorInput}
-                  maxLength={7}
-                  aria-label="Banner color hex code"
-                  placeholder="#RRGGBB"
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setBannerColorInput(value);
-                    if (/^#[0-9a-fA-F]{6}$/.test(value))
-                      setBannerColor(value.toLowerCase());
-                  }}
-                  onBlur={() => {
-                    if (!/^#[0-9a-fA-F]{6}$/.test(bannerColorInput))
-                      setBannerColorInput(bannerColor || palette.sidebar);
-                  }}
-                />
-                <button
-                  className="secondary small"
-                  type="button"
-                  disabled={!bannerColor}
-                  onClick={() => setBannerColor("")}
-                >
-                  Use theme color
-                </button>
-              </div>
-            </div>
-            <div className="wallpaper-controls">
-              <label htmlFor="wallpaper-file">Wallpaper</label>
-              <input
-                id="wallpaper-file"
-                type="file"
-                accept="image/*"
-                onChange={uploadWallpaper}
-              />
-              <p className="helper">Saved in this browser. Images are resized before saving.</p>
-              <div className="wallpaper-tint-control">
-                <label htmlFor="wallpaper-tint">Wallpaper tint</label>
-                <div className="wallpaper-tint-row">
-                  <input
-                    id="wallpaper-tint"
-                    type="color"
-                    value={wallpaperTint}
-                    onChange={(event) => setWallpaperTint(event.target.value)}
-                    aria-label="Choose wallpaper tint color"
-                  />
-                  <span>{wallpaperTint.toUpperCase()}</span>
-                  <input
-                    type="range"
-                    min="10"
-                    max="95"
-                    step="5"
-                    value={wallpaperTintStrength}
-                    onChange={(event) =>
-                      setWallpaperTintStrength(Number(event.target.value))
-                    }
-                    aria-label="Wallpaper tint strength"
-                  />
-                  <output>{wallpaperTintStrength}%</output>
-                </div>
-              </div>
-              {wallpaper && (
-                <button
-                  className="secondary small"
-                  onClick={() => {
-                    setWallpaper("");
-                    setAppearanceError("");
-                  }}
-                >
-                  Remove wallpaper
-                </button>
-              )}
-              {appearanceError && <p className="error">{appearanceError}</p>}
-            </div>
-          </section>
-        </div>
-      )}
-      {importConfirmOpen && (
-        <div
-          className="modal-backdrop import-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !importLoading)
-              setImportConfirmOpen(false);
-          }}
-        >
-          <section
-            className="entry-modal import-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="import-title"
-          >
-            <div className="modal-heading">
-              <div>
-                <span className="eyebrow">ONE-TIME IMPORT</span>
-                <h2 id="import-title">Import local sessions?</h2>
-              </div>
-              <button
-                className="icon-button"
-                aria-label="Close import confirmation"
-                disabled={importLoading}
-                onClick={() => setImportConfirmOpen(false)}
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <p className="import-description">
-              Import up to {localImportCandidates.length} sessions from this browser into the signed-in Supabase account. Existing duplicates will be skipped. Your local data will not be changed or deleted.
-            </p>
-            <div className="form-footer import-actions">
-              <button
-                className="secondary"
-                type="button"
-                disabled={importLoading}
-                onClick={() => setImportConfirmOpen(false)}
-              >
-                Cancel
-              </button>
-              <button
-                className="primary"
-                type="button"
-                disabled={importLoading}
-                onClick={() => void importLocalSessions()}
-              >
-                {importLoading ? "Importing…" : "Import sessions"}
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
+
+
     </div>
   );
 }
