@@ -3,6 +3,7 @@ create table if not exists public.study_sessions (
   user_id uuid not null references auth.users (id) on delete cascade,
   course text not null,
   description text not null default '',
+  session_name text not null default '',
   status text not null default 'draft' check (status in ('draft', 'submitted')),
   start_time timestamptz not null,
   end_time timestamptz not null,

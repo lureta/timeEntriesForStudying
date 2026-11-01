@@ -1,5 +1,9 @@
+import GoalProgress from "./components/GoalProgress";
+import CalendarSlots from "./components/CalendarSlots";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Copy,
+  ClipboardPaste,
   CalendarDays,
   ChartColumn,
   Plus,
@@ -49,13 +53,16 @@ type Entry = {
   start: string;
   end: string;
   notes: string;
+  name?: string;
   status?: "draft" | "submitted";
+  pending?: boolean;
 };
 type StudySessionRow = {
   id: string;
   user_id: string;
   course: string;
   description: string;
+  session_name: string;
   start_time: string;
   end_time: string;
   created_at: string;
@@ -233,6 +240,7 @@ const entryToSessionRow = (entry: Entry, userId: string) => ({
   user_id: userId,
   course: entry.course,
   description: entry.notes,
+  session_name: entry.name || "",
   status: entry.status || "draft",
   start_time: new Date(`${entry.date}T${entry.start}:00`).toISOString(),
   end_time: new Date(`${entry.date}T${entry.end}:00`).toISOString(),
@@ -247,6 +255,7 @@ const sessionRowToEntry = (row: StudySessionRow): Entry => {
     start: hhmm(start),
     end: hhmm(end),
     notes: row.description || "",
+    name: row.session_name || "",
     status: row.status,
   };
 };
@@ -362,26 +371,40 @@ function StudydayBrand() {
 
 export default function App() {
   const [entries, setEntries] = useState<Entry[]>(loadEntries);
+  const [copiedDay, setCopiedDay] = useState<{ date: string; entries: Entry[] } | null>(null);
+  const [pastingDay, setPastingDay] = useState(false);
+  const pasteLock = useRef(false);
+  const [copyMessage, setCopyMessage] = useState("");
+  const [pendingDragEntries, setPendingDragEntries] = useState<Entry[]>([]);
   const sessionRevision = useRef(0);
   const [categories, setCategories] = useState<string[]>(loadCategories);
   const [categoryColors, setCategoryColors] = useState<Record<string, string>>(
     loadCategoryColors,
   );
   const [view, setView] = useState<View>("timesheet");
-  const [categoryRange, setCategoryRange] = useState<"day" | "week">("week");
+  const dailyChartRef = useRef<HTMLDivElement>(null);
+  const [categoryRange, setCategoryRange] = useState<"day" | "week">("day");
   const [categoryDay, setCategoryDay] = useState(iso(new Date()));
+  const [newGoalCategory, setNewGoalCategory] = useState("");
+  const [newCategoryGoalHours, setNewCategoryGoalHours] = useState("1");
+  const [categoryGoalError, setCategoryGoalError] = useState("");
   const [week, setWeek] = useState(() => monday(new Date()));
   const [course, setCourse] = useState(DEFAULT_CATEGORIES[0]);
   const [date, setDate] = useState(iso(new Date()));
   const [start, setStart] = useState("09:00");
   const [end, setEnd] = useState("10:00");
   const [notes, setNotes] = useState("");
+  const [sessionName, setSessionName] = useState("");
   const [goal, setGoal] = useState(() =>
     Number(localStorage.getItem("studyday.goal") || 20),
   );
   const [focusPreferences, setFocusPreferences] = useState<FocusPreferences>(() => loadColorSetting("studyday.focusPreferences", { mode: "countdown", duration: 30, focusMinutes: 25, breakMinutes: 5 }));
   const [taskData, setTaskData] = useState<{ tasks: Task[] }>(() => !supabase ? loadColorSetting("studyday.tasks.local", { tasks: [] }) : { tasks: [] });
   const [inspirationNote, setInspirationNote] = useState(() => !supabase ? localStorage.getItem("studyday.inspiration.local") || "" : "");
+  const [editingGoal, setEditingGoal] = useState(false);
+  const [goalError, setGoalError] = useState("");
+  const [dailyGoals, setDailyGoals] = useState<Record<string, number>>({});
+  const [categoryGoals, setCategoryGoals] = useState<Record<string, Record<string, number>>>({});
   const [goalInput, setGoalInput] = useState(() => String(goal));
 
   const [events, setEvents] = useState<CalEvent[]>([]);
@@ -454,9 +477,7 @@ export default function App() {
       return changed ? next : current;
     });
   }, [events]);
-  const applyCalendarTheme = (colors: readonly string[], overrides: Record<string, string> = {}, savedCategoryColors: Record<string, string> = {}) => {
-    const names = [...new Set([...categories, ...entries.map((entry) => entry.course)])];
-    setCategoryColors(Object.fromEntries(names.map((name, index) => [name, savedCategoryColors[name] || colors[index % colors.length]])));
+  const applyCalendarTheme = (colors: readonly string[], overrides: Record<string, string> = {}) => {
     setCalendarPalette([...colors]);
     setGoogleColorOverrides({ ...overrides });
     setUseGoogleColors(false);
@@ -544,9 +565,9 @@ export default function App() {
   };
   const workspace = { categories, categoryColors, goal, theme, wallpaper, wallpaperTint, wallpaperTintStrength, bannerColor,
     googleColorOverrides, useGoogleColors, googleEventColor, calendarPalette, savedCalendarThemes, calendarSeriesSlots,
-    savedAppearances, taskData, inspirationNote, focusPreferences };
+    savedAppearances, taskData, inspirationNote, focusPreferences, dailyGoals, categoryGoals };
   const workspaceSync = useWorkspaceSync(authUser?.id, workspace, {
-    categories: DEFAULT_CATEGORIES, categoryColors: {}, goal: 20, theme: "forest" as ThemeName, wallpaper: "", wallpaperTint: "#f5f5f5",
+    categories: DEFAULT_CATEGORIES, categoryColors: {}, goal: 20, dailyGoals: {}, categoryGoals: {}, theme: "forest" as ThemeName, wallpaper: "", wallpaperTint: "#f5f5f5",
     wallpaperTintStrength: 82, bannerColor: "", googleColorOverrides: {}, useGoogleColors: true, googleEventColor: "#f8e9e2",
     calendarPalette: [...CATEGORY_THEMES.soft.colors], savedCalendarThemes: [], calendarSeriesSlots: {}, savedAppearances: [], taskData: { tasks: [] }, inspirationNote: "", focusPreferences: { mode: "countdown", duration: 30, focusMinutes: 25, breakMinutes: 5 },
   }, (value) => {
@@ -555,7 +576,7 @@ export default function App() {
     setBannerColor(value.bannerColor); setBannerColorInput(value.bannerColor || THEMES[value.theme].sidebar);
     setGoogleColorOverrides(value.googleColorOverrides); setUseGoogleColors(value.useGoogleColors); setGoogleEventColor(value.googleEventColor);
     setCalendarPalette(value.calendarPalette); setSavedCalendarThemes(value.savedCalendarThemes); setCalendarSeriesSlots(value.calendarSeriesSlots);
-    setSavedAppearances(value.savedAppearances); setAppearancesLoaded(true); setTaskData(value.taskData); setInspirationNote(value.inspirationNote); setFocusPreferences(value.focusPreferences);
+    setSavedAppearances(value.savedAppearances); setAppearancesLoaded(true); setTaskData(value.taskData); setInspirationNote(value.inspirationNote); setFocusPreferences(value.focusPreferences); setDailyGoals(value.dailyGoals); setCategoryGoals(value.categoryGoals);
   }, async () => {
     const legacyNote = localStorage.getItem(`studyday.inspiration.${authUser?.id}`) || "";
     return { savedAppearances: await listAppearanceThemes(), taskData: loadColorSetting(`studyday.tasks.${authUser?.id}`, { tasks: [] }),
@@ -659,6 +680,8 @@ export default function App() {
   useEffect(() => {
     setShowEntryForm(false);
     setEditingEntryId(null);
+    setPendingDragEntries([]);
+    setCopiedDay(null); setCopyMessage("");
     if (!supabase || !authUser) {
       if (supabase) setEntries(loadEntries());
       setSessionsLoading(false);
@@ -680,7 +703,7 @@ export default function App() {
       try {
         const { data, error } = await client
           .from("study_sessions")
-          .select("id,user_id,course,description,start_time,end_time,created_at,status")
+          .select("id,user_id,course,description,start_time,end_time,created_at,status,session_name")
           .eq("user_id", authUser.id)
           .order("start_time", { ascending: false });
         if (!active || revision !== sessionRevision.current) return;
@@ -728,11 +751,13 @@ export default function App() {
       }),
     [week],
   );
-  const weekEntries = entries.filter(
+  const weekEntries = [...entries, ...pendingDragEntries.filter((pending) => !entries.some((entry) => entry.id === pending.id))].filter(
     (e) => e.date >= iso(days[0]) && e.date <= iso(days[6]),
   );
-  const draftEntries = weekEntries.filter((entry) => entry.status !== "submitted");
+  const draftEntries = weekEntries.filter((entry) => !entry.pending && entry.status !== "submitted");
   const total = weekEntries.reduce((sum, e) => sum + hours(e), 0);
+  const categoryGoalPeriod = `${categoryRange}:${categoryRange === "day" ? categoryDay : iso(week)}`;
+  const currentCategoryGoals = categoryGoals[categoryGoalPeriod] || {};
   const categoryEntries = categoryRange === "day" ? entries.filter((entry) => entry.date === categoryDay) : weekEntries;
   const grouped = [...new Set([...categories, ...categoryEntries.map((entry) => entry.course)])].map((name, i) => ({
     name,
@@ -752,6 +777,18 @@ export default function App() {
       target: Number((goal / 7).toFixed(2)),
     };
   });
+  const hourlyProgress = Array.from({ length: 97 }, (_, index) => {
+    const minute = index * 15;
+    const value = categoryEntries.reduce((sum, entry) => sum + Math.max(0,
+      Math.min(minutes(entry.end), minute) - minutes(entry.start)) / 60, 0);
+    return { day: minute === 1440 ? "Midnight" : new Date(2000, 0, 1, Math.floor(minute / 60), minute % 60).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }), actual: Number(value.toFixed(3)) };
+  });
+  const weeklyHistory = Array.from({ length: 6 }, (_, index) => {
+    const start = new Date(week); start.setDate(start.getDate() - (5 - index) * 7);
+    const end = new Date(start); end.setDate(end.getDate() + 6);
+    const value = entries.filter((entry) => entry.date >= iso(start) && entry.date <= iso(end)).reduce((sum, entry) => sum + hours(entry), 0);
+    return { week: start.toLocaleDateString("en-US", { month: "short", day: "numeric" }), hours: Number(value.toFixed(3)) };
+  });
   const moveWeek = (delta: number) =>
     setWeek((w) => {
       const d = new Date(w);
@@ -760,6 +797,7 @@ export default function App() {
     });
   const openEntryForm = (day: string, hour = 9) => {
     setEditingEntryId(null);
+    setSessionName("");
     setDate(day);
     setStart(`${String(hour).padStart(2, "0")}:00`);
     setEnd(
@@ -777,6 +815,7 @@ export default function App() {
     setStart(entry.start);
     setEnd(entry.end);
     setNotes(entry.notes);
+    setSessionName(entry.name || "");
     setFormError("");
     setShowEntryForm(true);
   };
@@ -805,6 +844,7 @@ export default function App() {
     const fields = {
       course: row.course,
       description: row.description,
+      session_name: row.session_name,
       status: row.status,
       start_time: row.start_time,
       end_time: row.end_time,
@@ -816,12 +856,12 @@ export default function App() {
             .update(fields)
             .eq("id", entry.id)
             .eq("user_id", authUser.id)
-            .select("id,user_id,course,description,start_time,end_time,created_at,status")
+            .select("id,user_id,course,description,start_time,end_time,created_at,status,session_name")
             .single()
         : await supabase
             .from("study_sessions")
             .insert(row)
-            .select("id,user_id,course,description,start_time,end_time,created_at,status")
+            .select("id,user_id,course,description,start_time,end_time,created_at,status,session_name")
             .single();
       if (result.error) {
         setCloudError(`Could not save study session: ${result.error.message}`);
@@ -857,6 +897,7 @@ export default function App() {
       start,
       end,
       notes: notes.trim(),
+      name: sessionName.trim(),
       status: "draft",
     };
     if (!(await saveStudySession(entry, Boolean(editingEntryId)))) return;
@@ -864,6 +905,31 @@ export default function App() {
     setEditingEntryId(null);
     setShowEntryForm(false);
     setWeek(monday(dateFrom(date)));
+  };
+  const pasteDay = async (targetDate: string) => {
+    if (!copiedDay || pasteLock.current) return;
+    const signature = (entry: Entry) => JSON.stringify([entry.course, entry.name || "", entry.start, entry.end, entry.notes]);
+    const existing = new Set(entries.filter((entry) => entry.date === targetDate).map(signature));
+    const copies = copiedDay.entries.filter((entry) => {
+      const key = signature(entry); if (existing.has(key)) return false; existing.add(key); return true;
+    }).map((entry) => ({ ...entry, id: crypto.randomUUID(), date: targetDate, status: "draft" as const }));
+    if (!copies.length) { setCopyMessage("These study blocks already exist on that day."); return; }
+    pasteLock.current = true; setPastingDay(true); setCloudError("");
+    try {
+      if (supabase) {
+        if (!authUser || !sessionsLoaded) throw new Error("Sign in and wait for your sessions to load before pasting.");
+        const { data, error } = await supabase.from("study_sessions")
+          .insert(copies.map((entry) => entryToSessionRow(entry, authUser.id)))
+          .select("id,user_id,course,description,start_time,end_time,created_at,status,session_name");
+        if (error) throw error;
+        sessionRevision.current += 1;
+        setEntries((current) => [...(data || []).map((row) => sessionRowToEntry(row as StudySessionRow)), ...current]);
+      } else {
+        setEntries((current) => [...copies, ...current]);
+      }
+      setCopyMessage(`Pasted ${copies.length} study ${copies.length === 1 ? "block" : "blocks"} onto ${dateFrom(targetDate).toLocaleDateString()}. Copies are drafts.`);
+    } catch (error) { setCloudError(`Could not paste study blocks: ${(error as { message?: string })?.message || "Network error"}`); }
+    finally { pasteLock.current = false; setPastingDay(false); }
   };
   const deleteEntry = async (entryId: string) => {
     if (supabase) {
@@ -1260,6 +1326,7 @@ export default function App() {
     client.requestAccessToken({ prompt: "consent" });
   };
   const disconnectGoogle = () => {
+    setCalendarThemesOpen(false);
     setEditingGoogle(null);
     if (googleToken && window.google)
       window.google.accounts.oauth2.revoke(googleToken, () => {});
@@ -1307,6 +1374,7 @@ export default function App() {
     end: string;
     day: string;
     title: string;
+    category?: string;
     color?: string;
     textColor?: string;
     kind: "study" | "google";
@@ -1334,7 +1402,7 @@ export default function App() {
       hour: "numeric", minute: date.getMinutes() ? "2-digit" : undefined,
     }).replace(" AM", "am").replace(" PM", "pm");
     const timeLabel = `${formatTime(iso(startDate) < item.day ? new Date(`${item.day}T00:00:00`) : startDate)}–${formatTime(endDate)}`;
-    const eventLabel = `${item.title} · ${timeLabel}${item.kind === "study" ? ` · ${item.status === "submitted" ? "Submitted" : "Draft"}` : ""}`;
+    const eventLabel = `${item.title} · ${timeLabel}${item.kind === "study" ? ` · ${item.status === "saving" ? "Saving…" : item.status === "submitted" ? "Submitted" : "Draft"}` : ""}`;
     const style = {
       left: `calc(${(item.lane / item.laneCount) * 100}% + 3px)`,
       width: `calc(${Math.min(1.5 / item.laneCount, 1 - item.lane / item.laneCount) * 100}% - 6px)`,
@@ -1354,11 +1422,12 @@ export default function App() {
     const content = (
       <>
         <b>{item.title}</b>
+        {item.category && cardHeight >= 72 && <span className="event-category">{item.category}</span>}
         {cardHeight >= 40 && <span className="event-time">{timeLabel}</span>}
         {item.kind === "study" && cardHeight >= 56 && (
           <small className="event-status">
             {item.status === "submitted" && <Check size={9} aria-hidden="true" />}
-            {item.status === "submitted" ? "Submitted" : "Draft"}
+            {item.status === "saving" ? "Saving…" : item.status === "submitted" ? "Submitted" : "Draft"}
           </small>
         )}
       </>
@@ -1548,33 +1617,66 @@ export default function App() {
         {workspaceSync.error && <p className="error" role="alert">{workspaceSync.error} <button className="secondary small" onClick={workspaceSync.retry}>Retry sync</button></p>}
         {cloudError && <p className="error cloud-error" role="alert">{cloudError}</p>}
         {sessionsLoading && <p className="helper cloud-message" role="status">Loading your Supabase sessions…</p>}
-        {view === "analytics" && <section className="stats">
+        {view === "analytics" && <div className="analytics-period-header">
+          <div><h2>{categoryRange === "day" ? "Your day at a glance" : "Your week at a glance"}</h2><p>{categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" }) : `${days[0].toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${days[6].toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`}</p></div>
+                <div className="category-chart-controls analytics-period-controls">
+                  <div role="group" aria-label="Analytics period">
+                    {(["day", "week"] as const).map((range) => <button key={range} type="button" aria-pressed={categoryRange === range} className={categoryRange === range ? "primary small" : "secondary small"} onClick={() => { setCategoryRange(range); if (range === "day" && (categoryDay < iso(days[0]) || categoryDay > iso(days[6]))) setCategoryDay(iso(days[0])); }}>{range === "day" ? "Day" : "Week"}</button>)}
+                  </div>
+                  <button className="icon-button" aria-label={`Previous ${categoryRange}`} onClick={() => {
+                    if (categoryRange === "week") moveWeek(-1);
+                    else { const day = dateFrom(categoryDay); day.setDate(day.getDate() - 1); setCategoryDay(iso(day)); setWeek(monday(day)); }
+                  }}><ChevronLeft size={16} /></button>
+                  <input type="date" aria-label={categoryRange === "day" ? "Day to show category hours" : "Choose a week for category hours"} value={categoryRange === "day" ? categoryDay : iso(week)} onChange={(event) => {
+                    if (!event.target.value) return;
+                    if (categoryRange === "day") { setCategoryDay(event.target.value); setWeek(monday(dateFrom(event.target.value))); }
+                    else setWeek(monday(dateFrom(event.target.value)));
+                  }} />
+                  <button className="icon-button" aria-label={`Next ${categoryRange}`} onClick={() => {
+                    if (categoryRange === "week") moveWeek(1);
+                    else { const day = dateFrom(categoryDay); day.setDate(day.getDate() + 1); setCategoryDay(iso(day)); setWeek(monday(day)); }
+                  }}><ChevronRight size={16} /></button>
+                </div>
+        </div>}
+        {view === "analytics" && <section className={`stats ${categoryRange === "day" ? "analytics-daily-stats" : ""}`}>
           <div className="stat">
-            <span>HOURS THIS WEEK</span>
-            <strong>{formatHours(total)}</strong>
+            <span>{categoryRange === "day" ? "HOURS THIS DAY" : "HOURS THIS WEEK"}</span>
+            <strong>{formatHours(categoryEntries.reduce((sum, entry) => sum + hours(entry), 0))}</strong>
             <small>Recorded study time</small>
           </div>
           <div className="stat">
             <span>STUDY SESSIONS</span>
-            <strong>{weekEntries.length}</strong>
+            <strong>{categoryEntries.length}</strong>
             <small>
-              {draftEntries.length} draft{draftEntries.length === 1 ? "" : "s"} to submit
+              {categoryEntries.filter((entry) => entry.status !== "submitted").length} drafts in this period
             </small>
           </div>
-          <div className="stat">
-            <span>WEEKLY GOAL</span>
-            <strong>{Math.round((total / Math.max(goal, 1)) * 100)}%</strong>
-            <div className="progress">
-              <div
-                style={{
-                  width: `${Math.min(100, (total / Math.max(goal, 1)) * 100)}%`,
-                }}
-              />
+          {categoryRange === "day" && <div className="stat"><GoalProgress key={categoryDay} label="DAILY GOAL" target={dailyGoals[categoryDay] || 0}
+            actual={categoryEntries.reduce((sum, entry) => sum + hours(entry), 0)} max={24}
+            onSave={(value) => setDailyGoals((current) => ({ ...current, [categoryDay]: value }))} /></div>}
+          {categoryRange === "week" && <div className="stat weekly-goal-stat">
+            <div className="weekly-goal-stat-heading"><span>WEEKLY GOAL</span>
+              {!editingGoal && <button type="button" className="icon-button" aria-label="Edit weekly goal" onClick={() => { setGoalInput(String(goal)); setEditingGoal(true); }}><Pencil size={14} /></button>}
             </div>
-            <small>
-              {formatHours(total)} of {goal}h target
-            </small>
-          </div>
+            {editingGoal ? <form className="weekly-goal-edit inline-goal-edit" onSubmit={(event) => {
+                  event.preventDefault(); const value = Number(goalInput);
+                  if (!Number.isInteger(value) || value < 1 || value > 200) { setGoalError("Enter a whole number from 1 to 200 hours."); return; }
+                  setGoal(value); setGoalInput(String(value)); setEditingGoal(false); setGoalError("");
+                }}>
+                  <div className="goal-input-wrap">
+                    <input id="goal-input" aria-label="Weekly goal hours" type="number" min="1" max="200" step="1" required autoFocus value={goalInput} onChange={(event) => setGoalInput(event.target.value)} /><span className="goal-unit">h</span>
+                    <button className="primary small" type="submit">Save goal</button>
+                    <button className="secondary small" type="button" onClick={() => { setEditingGoal(false); setGoalInput(String(goal)); setGoalError(""); }}>Cancel</button>
+                  </div>
+                  {goalError && <p className="error" role="alert">{goalError}</p>}
+                </form> : <button className="goal-number-button" type="button" aria-label={`Edit weekly goal, currently ${goal} hours`} onClick={() => { setGoalInput(String(goal)); setEditingGoal(true); }}>{goal}h</button>}
+            <span className="weekly-goal-percent">{Math.round((total / Math.max(goal, 1)) * 100)}% complete</span>
+            <div className="progress" role="progressbar" aria-label="Weekly goal completion" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Math.round(total / Math.max(goal, 1) * 100))}>
+              <div style={{ width: `${Math.min(100, total / Math.max(goal, 1) * 100)}%`, background: "var(--primary)" }} />
+            </div>
+            <small>{formatHours(total)} studied · {formatHours(Math.max(0, goal - total))} remaining</small>
+
+          </div>}
         </section>}
         {view === "timesheet" && (
           <>
@@ -1583,7 +1685,7 @@ export default function App() {
               <div className="panel-heading">
                 <div>
                   <h2>Weekly schedule</h2>
-                  <p>Click a time slot to add a study session</p>
+                  <p>Drag to instantly add a draft. Click an entry to edit it.</p>
                 </div>
                 <div className="week-nav">
                   <button
@@ -1650,9 +1752,9 @@ export default function App() {
                       <CalendarDays size={14} /> Connect Google Calendar
                     </button>
                   )}
-                  <button className="secondary small" type="button" onClick={() => setCalendarThemesOpen(true)}>
-                    <Palette size={14} /> Theme
-                  </button>
+                  {googleToken && <button className="secondary small" type="button" onClick={() => setCalendarThemesOpen(true)}>
+                    <Palette size={14} /> Google Calendar theme
+                  </button>}
                   <button
                     className="secondary small"
                     onClick={() => setCategoryManagerOpen(true)}
@@ -1663,6 +1765,7 @@ export default function App() {
                 </div>
               </div>
               {calendarError && <p className="error">{calendarError}</p>}
+              {copyMessage && <p className="helper" role="status">{copyMessage}</p>}
               {!googleToken && (
                 <p className="helper">
                   Google Calendar is optional. Connect it to see events alongside your study time.
@@ -1680,6 +1783,13 @@ export default function App() {
                     >
                       <span>{day.toLocaleDateString("en-US", { weekday: "short" })}</span>
                       <strong>{day.getDate()}</strong>
+                      <div className="day-copy-controls">
+                        <button type="button" title="Copy this day’s study blocks" aria-label={`Copy study blocks from ${key}`} disabled={pastingDay || !entries.some((entry) => entry.date === key)} onClick={() => {
+                          const copied = entries.filter((entry) => entry.date === key).map((entry) => ({ ...entry }));
+                          setCopiedDay({ date: key, entries: copied }); setCopyMessage(`Copied ${copied.length} study ${copied.length === 1 ? "block" : "blocks"}. Choose Paste on another day.`);
+                        }}><Copy size={12} /></button>
+                        {copiedDay && <button type="button" title="Paste copied study blocks" aria-label={`Paste study blocks onto ${key}`} disabled={pastingDay || copiedDay.date === key} onClick={() => void pasteDay(key)}><ClipboardPaste size={12} /></button>}
+                      </div>
                     </div>
                   );
                 })}
@@ -1727,7 +1837,8 @@ export default function App() {
                       start: `${key}T${entry.start}:00`,
                       end: `${key}T${entry.end}:00`,
                       day: key,
-                      title: entry.course,
+                      title: entry.name || entry.course,
+                      category: entry.name ? entry.course : undefined,
                       color:
                         categoryColors[entry.course] ||
                         COLORS[
@@ -1735,8 +1846,8 @@ export default function App() {
                             COLORS.length
                         ],
                       kind: "study" as const,
-                      status: entry.status,
-                      onEdit: () => openEditEntry(entry),
+                      status: entry.pending ? "saving" : entry.status,
+                      onEdit: entry.pending ? undefined : () => openEditEntry(entry),
                     }));
                   const dayStart = new Date(`${key}T00:00:00`);
                   const dayEnd = new Date(dayStart);
@@ -1765,16 +1876,21 @@ export default function App() {
                     : [];
                   return (
                     <div className="day-column" key={key}>
-                      <div className="slot-stack">
-                        {Array.from({ length: GRID_END - GRID_START }, (_, index) => (
-                          <button
-                            key={index}
-                            className="time-slot"
-                            aria-label={`Add study time ${clockLabel(GRID_START + index)} on ${key}`}
-                            onClick={() => openEntryForm(key, GRID_START + index)}
-                          />
-                        ))}
-                      </div>
+                      <CalendarSlots day={key} hourHeight={HOUR_HEIGHT} onSelect={(from, to, dragged) => {
+                        const format = (value: number) => `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
+                        if (dragged) {
+                          const entry: Entry = { id: crypto.randomUUID(), date: key,
+                            course: categories.includes(course) ? course : categories[0],
+                            start: format(from), end: format(to), notes: "", status: "draft" };
+                          setPendingDragEntries((current) => [...current, { ...entry, pending: true }]);
+                          void saveStudySession(entry, false).finally(() => {
+                            setPendingDragEntries((current) => current.filter((pending) => pending.id !== entry.id));
+                          });
+                          return;
+                        }
+                        openEntryForm(key, Math.floor(from / 60));
+                        setStart(format(from)); setEnd(format(to)); setNotes("");
+                      }} />
                       {layoutCalendarItems([...dayEvents, ...dayEntries]).map(renderCalendarItem)}
                     </div>
                   );
@@ -1853,56 +1969,78 @@ export default function App() {
         </div>
         {view === "analytics" && (
           <div className="analytics-grid">
+
             <section className="panel progress-chart-panel">
               <div className="panel-heading">
                 <div>
-                  <h2>Study hours by day</h2>
-                  <p>Daily totals with your average goal pace</p>
+                  <h2>{categoryRange === "day" ? "Daily cumulative progress" : "Study hours by day"}</h2>
+                  <p>{categoryRange === "day" ? "Recorded study hours add up throughout the day" : "Daily totals compared with your weekly goal’s daily pace"}</p>
                 </div>
                 <ChartColumn size={20} />
               </div>
-              <div className="chart-frame">
+              <div ref={dailyChartRef} className={categoryRange === "day" ? "daily-chart-scroll" : ""} tabIndex={categoryRange === "day" ? 0 : undefined} aria-label={categoryRange === "day" ? "Scrollable cumulative daily study progress" : undefined}>
+              <div className={`chart-frame ${categoryRange === "day" ? "daily-chart-wide" : ""}`}>
                 <ResponsiveContainer width="100%" height={280}>
-                  <ComposedChart data={progressData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
+                  <ComposedChart data={categoryRange === "day" ? hourlyProgress : progressData} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
                     <CartesianGrid stroke="#e8ede9" strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="day" tickLine={false} axisLine={false} />
                     <YAxis tickLine={false} axisLine={false} width={34} />
                     <Tooltip formatter={(value) => `${Number(value).toFixed(1)}h`} />
-                    <Bar dataKey="actual" name="Study hours" fill={chartColor} radius={[4, 4, 0, 0]} />
-                    <Line type="monotone" dataKey="target" name="Daily goal" stroke={chartGoalColor} strokeWidth={2} strokeDasharray="5 5" dot={false} />
+                    {categoryRange === "day" ? <Line type="linear" dataKey="actual" name="Total study hours" stroke={chartColor} strokeWidth={3} dot={false} activeDot={{ r: 4 }} /> : <Bar dataKey="actual" name="Study hours" fill={chartColor} radius={[4, 4, 0, 0]} />}
+                    {categoryRange === "week" && <Line type="monotone" dataKey="target" name="Average daily pace" stroke={chartGoalColor} strokeWidth={2} strokeDasharray="5 5" dot={false} />}
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
+              </div>
+              {categoryRange === "day" && dailyGoals[categoryDay] > 0 && <p className="helper daily-goal-caption">
+                {formatHours(categoryEntries.reduce((sum, entry) => sum + hours(entry), 0))} of {dailyGoals[categoryDay]}h daily goal · {Math.round(categoryEntries.reduce((sum, entry) => sum + hours(entry), 0) / dailyGoals[categoryDay] * 100)}% complete
+              </p>}
+              {categoryRange === "day" && <div className="daily-chart-navigation">
+                <span>Scroll to see all hours</span>
+                <button className="secondary small" type="button" aria-label="Show earlier hours" onClick={() => dailyChartRef.current?.scrollBy({ left: -320, behavior: "smooth" })}><ChevronLeft size={15} /></button>
+                <button className="secondary small" type="button" aria-label="Show later hours" onClick={() => dailyChartRef.current?.scrollBy({ left: 320, behavior: "smooth" })}><ChevronRight size={15} /></button>
+              </div>}
               <div className="chart-key">
                 <span><i className="key-actual" style={{ background: chartColor }} /> Study hours</span>
-                <span><i className="key-target" style={{ background: chartGoalColor }} /> Daily goal</span>
+                {categoryRange === "week" && <span><i className="key-target" style={{ background: chartGoalColor }} /> Average daily pace</span>}
               </div>
             </section>
             <div className="analytics-side">
+              <section className="panel category-goals-panel">
+          <div className="panel-heading"><div><h2>{categoryRange === "day" ? "Daily category goals" : "Weekly category goals"}</h2>
+            <p>Set hours for each category for {categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString() : `the week of ${dateFrom(iso(week)).toLocaleDateString()}`}. Daily and weekly targets are saved separately.</p></div></div>
+          <form className="category-goal-add" onSubmit={(event) => {
+            event.preventDefault(); const value = Number(newCategoryGoalHours);
+            if (!newGoalCategory || !categories.includes(newGoalCategory)) { setCategoryGoalError("Choose a category."); return; }
+            if (currentCategoryGoals[newGoalCategory]) { setCategoryGoalError("This category already has a goal for this period."); return; }
+            if (!Number.isFinite(value) || value <= 0 || value > (categoryRange === "day" ? 24 : 168)) { setCategoryGoalError("Enter a valid number of hours for this period."); return; }
+            setCategoryGoals((current) => ({ ...current, [categoryGoalPeriod]: { ...current[categoryGoalPeriod], [newGoalCategory]: value } }));
+            setNewGoalCategory(""); setNewCategoryGoalHours("1"); setCategoryGoalError("");
+          }}>
+            <label>Category<select required value={newGoalCategory} onChange={(event) => setNewGoalCategory(event.target.value)}>
+              <option value="">Choose a category</option>{categories.filter((category) => !currentCategoryGoals[category]).map((category) => <option key={category}>{category}</option>)}
+            </select></label>
+            <label>Goal hours<input required type="number" min="0.25" max={categoryRange === "day" ? 24 : 168} step="0.25" value={newCategoryGoalHours} onChange={(event) => setNewCategoryGoalHours(event.target.value)} /></label>
+            <button className="primary small" type="submit"><Plus size={14} /> Add category goal</button>
+          </form>
+          {categoryGoalError && <p className="error" role="alert">{categoryGoalError}</p>}
+          {!Object.keys(currentCategoryGoals).length && <p className="helper">Add only the categories you want to focus on for this {categoryRange}.</p>}
+          <div className="category-goals-grid">{Object.entries(currentCategoryGoals).map(([category, target]) => {
+            const actual = categoryEntries.filter((entry) => entry.course === category).reduce((sum, entry) => sum + hours(entry), 0);
+            return <div className="category-goal-card" key={`${categoryGoalPeriod}:${category}`}><GoalProgress label={category} target={target} actual={actual} max={categoryRange === "day" ? 24 : 168}
+              onSave={(value) => setCategoryGoals((current) => ({ ...current, [categoryGoalPeriod]: { ...current[categoryGoalPeriod], [category]: value } }))} />
+              <button className="secondary small" type="button" aria-label={`Remove ${category} goal`} onClick={() => setCategoryGoals((current) => {
+                const updated = { ...current[categoryGoalPeriod] }; delete updated[category]; return { ...current, [categoryGoalPeriod]: updated };
+              })}>Remove goal</button>
+            </div>;
+          })}</div>
+        </section>
               <section className="panel category-chart-panel">
                 <div className="panel-heading">
                   <div>
                     <h2>Hours by category</h2>
                     <p>{categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : `${days[0].toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${days[6].toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`}</p>
                   </div>
-                </div>
-                <div className="category-chart-controls">
-                  <div role="group" aria-label="Category chart period">
-                    {(["day", "week"] as const).map((range) => <button key={range} type="button" aria-pressed={categoryRange === range} className={categoryRange === range ? "primary small" : "secondary small"} onClick={() => setCategoryRange(range)}>{range === "day" ? "Day" : "Week"}</button>)}
-                  </div>
-                  <button className="icon-button" aria-label={`Previous ${categoryRange}`} onClick={() => {
-                    if (categoryRange === "week") moveWeek(-1);
-                    else { const day = dateFrom(categoryDay); day.setDate(day.getDate() - 1); setCategoryDay(iso(day)); }
-                  }}><ChevronLeft size={16} /></button>
-                  <input type="date" aria-label={categoryRange === "day" ? "Day to show category hours" : "Choose a week for category hours"} value={categoryRange === "day" ? categoryDay : iso(week)} onChange={(event) => {
-                    if (!event.target.value) return;
-                    if (categoryRange === "day") setCategoryDay(event.target.value);
-                    else setWeek(monday(dateFrom(event.target.value)));
-                  }} />
-                  <button className="icon-button" aria-label={`Next ${categoryRange}`} onClick={() => {
-                    if (categoryRange === "week") moveWeek(1);
-                    else { const day = dateFrom(categoryDay); day.setDate(day.getDate() + 1); setCategoryDay(iso(day)); }
-                  }}><ChevronRight size={16} /></button>
                 </div>
                 {grouped.length === 0 ? (
                   <p className="empty">No study time recorded {categoryRange === "day" ? "on this day" : "this week"}.</p>
@@ -1922,68 +2060,21 @@ export default function App() {
                   </div>
                 )}
               </section>
-              <section className="panel goal-panel">
-                <div className="goal-label">
-                  <label htmlFor="goal-input">Weekly goal</label>
-                  <div className="goal-input-wrap">
-                    <input
-                      id="goal-input"
-                      type="number"
-                      min="1"
-                      max="200"
-                      step="1"
-                      value={goalInput}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        setGoalInput(value);
-                        const numericValue = Number(value);
-                        if (value && numericValue >= 1 && numericValue <= 200)
-                          setGoal(numericValue);
-                      }}
-                      onBlur={() => {
-                        const numericValue = Number(goalInput);
-                        if (!goalInput || numericValue < 1) {
-                          setGoalInput(String(goal));
-                        } else if (numericValue > 200) {
-                          setGoal(200);
-                          setGoalInput("200");
-                        }
-                      }}
-                    />
-                    <span>hours</span>
-                  </div>
-                </div>
-                <input
-                  className="goal-slider"
-                  id="goal-slider"
-                  type="range"
-                  min="1"
-                  max="200"
-                  step="1"
-                  value={goal}
-                  aria-label="Adjust weekly goal"
-                  onChange={(event) => {
-                    const value = Number(event.target.value);
-                    setGoal(value);
-                    setGoalInput(String(value));
-                  }}
-                />
-                <div className="progress large">
-                  <div style={{ width: `${Math.min(100, (total / goal) * 100)}%` }} />
-                </div>
-                <p className="helper">
-                  {formatHours(total)} studied · {formatHours(Math.max(0, goal - total))} remaining
-                </p>
-                <button
-                  className="secondary"
-                  onClick={() => setView("timesheet")}
-                >
-                  Back to calendar
-                </button>
-              </section>
+
             </div>
           </div>
         )}
+        {view === "analytics" && categoryRange === "week" && <section className="panel weekly-history-panel">
+          <div className="panel-heading"><div><h2>Week by week</h2><p>Six weeks of study time, ending with the selected week</p></div></div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={weeklyHistory} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+              <CartesianGrid stroke="#e8ede9" vertical={false} strokeDasharray="3 3" />
+              <XAxis dataKey="week" tickLine={false} axisLine={false} /><YAxis width={34} tickLine={false} axisLine={false} />
+              <Tooltip formatter={(value) => `${Number(value).toFixed(1)}h`} />
+              <Bar dataKey="hours" name="Study hours" fill={chartColor} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </section>}
         {view === "tasks" && <StudyTasks key={authUser?.id || "local"} data={taskData} setData={setTaskData} />}
         {view === "appearance" && <section className="panel appearance-page" aria-label="Appearance settings">
             <fieldset className="theme-fieldset">
@@ -2132,12 +2223,12 @@ export default function App() {
           </span>
         </footer>
       </main>
-      {calendarThemesOpen && <div className="modal-backdrop">
+      {googleToken && calendarThemesOpen && <div className="modal-backdrop">
         <section className="entry-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-theme-title">
-          <div className="modal-heading"><div><span className="eyebrow">STUDYDAY COLORS</span><h2 id="calendar-theme-title">Calendar themes</h2></div>
+          <div className="modal-heading"><div><span className="eyebrow">STUDYDAY COLORS</span><h2 id="calendar-theme-title">Google Calendar themes</h2></div>
             <button className="icon-button" aria-label="Close calendar themes" onClick={() => setCalendarThemesOpen(false)}><X size={18} /></button>
           </div>
-          <p className="helper">Themes color your study entries, categories, analytics, and Google events together. Each Google event series gets its own color. Recurring occurrences keep the same color across weeks. Applying a theme replaces local event color overrides; Google Calendar stays unchanged.</p>
+          <p className="helper">Themes change Google event colors in Studyday only. Study entries and colors in Google Calendar stay unchanged. Each Google event series gets its own color. Recurring occurrences keep the same color across weeks. Applying a theme replaces local event color overrides; Google Calendar stays unchanged.</p>
           <div className="category-theme-options">
             <button className="secondary small" type="button" onClick={() => { setUseGoogleColors(true); setGoogleColorOverrides({}); }}>Use Google colors</button>
             {Object.entries(CATEGORY_THEMES).map(([id, option]) => <button type="button" className="secondary category-theme-option" key={id} onClick={() => applyCalendarTheme(option.colors)}>
@@ -2159,16 +2250,11 @@ export default function App() {
             if (editingThemeId) {
               const original = savedCalendarThemes.find((theme) => theme.id === editingThemeId);
               if (!original) { setCalendarThemeError("This theme no longer exists."); return; }
-              const updated = { ...original, label, colors: [...editingThemeColors],
-                categoryColors: Object.fromEntries(Object.entries(original.categoryColors || {}).map(([name, color]) => {
-                  const slot = original.colors.indexOf(color);
-                  return [name, slot >= 0 ? editingThemeColors[slot] : color];
-                })),
-              };
+              const updated = { ...original, label, colors: [...editingThemeColors] };
               setSavedCalendarThemes((current) => current.map((theme) => theme.id === editingThemeId ? updated : theme));
-              applyCalendarTheme(updated.colors, updated.overrides, updated.categoryColors);
+              applyCalendarTheme(updated.colors, updated.overrides);
             } else {
-              setSavedCalendarThemes((current) => [...current, { id: crypto.randomUUID(), label, colors: [...calendarPalette], overrides: { ...googleColorOverrides }, categoryColors: { ...categoryColors } }]);
+              setSavedCalendarThemes((current) => [...current, { id: crypto.randomUUID(), label, colors: [...calendarPalette], overrides: { ...googleColorOverrides } }]);
             }
             setEditingThemeId(null); setCalendarThemeName(""); setCalendarThemeError("");
           }}>
@@ -2177,10 +2263,10 @@ export default function App() {
             {editingThemeId && <button className="secondary small" type="button" onClick={() => { setEditingThemeId(null); setCalendarThemeName(""); setCalendarThemeError(""); }}>Cancel</button>}
           </form>
           {calendarThemeError && <p className="error" role="alert">{calendarThemeError}</p>}
-          <p className="helper">Saves this palette, category colors, and individual event colors to your account.</p>
+          <p className="helper">Saves this Google event palette and individual event colors to your account.</p>
           {savedCalendarThemes.length > 0 && <><h3 className="calendar-theme-section">Your themes</h3>
             {savedCalendarThemes.map((theme) => <div className="calendar-saved-theme" key={theme.id}>
-              <button className="secondary category-theme-option" type="button" onClick={() => applyCalendarTheme(theme.colors, theme.overrides, theme.categoryColors)}>{theme.label}
+              <button className="secondary category-theme-option" type="button" onClick={() => applyCalendarTheme(theme.colors, theme.overrides)}>{theme.label}
                 <span className="category-theme-swatches" aria-hidden="true">{theme.colors.map((color, index) => <i key={index} style={{ backgroundColor: color }} />)}</span>
               </button>
               <button className="icon-button" type="button" aria-label={`Edit ${theme.label} theme`} title="Edit theme" onClick={() => {
@@ -2267,9 +2353,15 @@ export default function App() {
             </div>
             <form onSubmit={addEntry}>
               <div className="field">
-                <label htmlFor="course">Course / activity</label>
+                <label htmlFor="session-name">Session name (optional)</label>
+                <input id="session-name" value={sessionName} maxLength={120}
+                  placeholder="e.g. Midterm review" onChange={(event) => setSessionName(event.target.value)} />
+              </div>
+              <div className="field">
+                <label htmlFor="course">Category / activity</label>
                 <select
                   id="course"
+                  autoFocus
                   value={course}
                   onChange={(event) => setCourse(event.target.value)}
                 >
@@ -2336,9 +2428,10 @@ export default function App() {
                   {Math.max(0, (minutes(end) - minutes(start)) / 60).toFixed(2)}
                   {" "}hours · {editingEntryId ? "will be a draft" : "saved as draft"}
                 </span>
+                <div className="entry-footer-actions">
                 {editingEntryId && (
                   <button
-                    className="danger small"
+                    className="danger"
                     type="button"
                     onClick={() => deleteEntry(editingEntryId)}
                   >
@@ -2348,6 +2441,7 @@ export default function App() {
                 <button className="primary" type="submit">
                   {editingEntryId ? "Save changes" : <><Plus size={16} /> Add entry</>}
                 </button>
+                </div>
               </div>
             </form>
           </section>
@@ -2394,14 +2488,13 @@ export default function App() {
                 <Palette size={14} /> Category theme
               </button>
               {categoryThemesOpen && <div id="category-theme-options" className="category-theme-options">
-                <p className="helper">Apply colors to all categories and Google Calendar events. You can still change individual colors.</p>
+                <p className="helper">Apply colors to study categories. Google Calendar event colors stay unchanged.</p>
                 {Object.entries(CATEGORY_THEMES).map(([key, option]) => (
                   <button className="secondary category-theme-option" type="button" key={key}
                     onClick={() => {
                       setCategoryColors((current) => ({ ...current,
                         ...Object.fromEntries(categories.map((category, index) => [category, option.colors[index % option.colors.length]])),
                       }));
-                      applyCalendarTheme(option.colors);
                     }}>
                     {option.label}
                     <span className="category-theme-swatches" aria-hidden="true">
