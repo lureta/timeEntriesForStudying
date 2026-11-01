@@ -29,9 +29,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Build site
-        run: npm run build
+        run: |
+          for name in VITE_GOOGLE_CLIENT_ID VITE_SUPABASE_URL VITE_SUPABASE_PUBLISHABLE_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing repository Actions secret: $name"
+              exit 1
+            fi
+          done
+          npm run build
         env:
           VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
         with:

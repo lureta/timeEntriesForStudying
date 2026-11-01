@@ -591,8 +591,14 @@ p {
 }
 .calendar-event b {
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.calendar-event:hover,
+.calendar-event:focus-visible {
+  z-index: 100 !important;
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
 }
 .study-event {
   border-left: 3px solid var(--study-border, #7d982f);

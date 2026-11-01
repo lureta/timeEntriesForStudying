@@ -19,6 +19,8 @@ import {
   Tags,
   CalendarClock,
   Palette,
+  Cloud,
+  LogIn,
 } from "lucide-react";
 import {
   Bar,
@@ -32,6 +34,9 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import type { User } from "@supabase/supabase-js";
+import { supabase } from "./services/supabase";
+import { layoutCalendarItems } from "./services/calendarLayout";
 
 type Entry = {
   id: string;
@@ -41,6 +46,15 @@ type Entry = {
   end: string;
   notes: string;
   status?: "draft" | "submitted";
+};
+type StudySessionRow = {
+  id: string;
+  user_id: string;
+  course: string;
+  description: string;
+  start_time: string;
+  end_time: string;
+  created_at: string;
 };
 type CalEvent = {
   id: string;
@@ -179,6 +193,41 @@ const hours = (entry: Entry) =>
   Math.max(0, (minutes(entry.end) - minutes(entry.start)) / 60);
 const hhmm = (date: Date) =>
   `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+const entryToSessionRow = (entry: Entry, userId: string) => ({
+  id: entry.id,
+  user_id: userId,
+  course: entry.course,
+  description: entry.notes,
+  start_time: new Date(`${entry.date}T${entry.start}:00`).toISOString(),
+  end_time: new Date(`${entry.date}T${entry.end}:00`).toISOString(),
+});
+const sessionRowToEntry = (row: StudySessionRow): Entry => {
+  const start = new Date(row.start_time);
+  const end = new Date(row.end_time);
+  return {
+    id: row.id,
+    date: iso(start),
+    course: row.course,
+    start: hhmm(start),
+    end: hhmm(end),
+    notes: row.description || "",
+    status: "draft",
+  };
+};
+const localEntryKey = (entry: Entry) =>
+  [
+    entry.course.trim().toLowerCase(),
+    entry.notes.trim().toLowerCase(),
+    new Date(`${entry.date}T${entry.start}:00`).toISOString(),
+    new Date(`${entry.date}T${entry.end}:00`).toISOString(),
+  ].join("|");
+const sessionRowKey = (row: StudySessionRow) =>
+  [
+    row.course.trim().toLowerCase(),
+    (row.description || "").trim().toLowerCase(),
+    new Date(row.start_time).toISOString(),
+    new Date(row.end_time).toISOString(),
+  ].join("|");
 const loadEntries = (): Entry[] => {
   try {
     return JSON.parse(
@@ -249,6 +298,7 @@ const hexWithAlpha = (hex: string, alpha: number) => {
 
 export default function App() {
   const [entries, setEntries] = useState<Entry[]>(loadEntries);
+  const sessionRevision = useRef(0);
   const [categories, setCategories] = useState<string[]>(loadCategories);
   const [categoryColors, setCategoryColors] = useState<Record<string, string>>(
     loadCategoryColors,
@@ -271,6 +321,18 @@ export default function App() {
   const [googleToken, setGoogleToken] = useState<string | null>(null);
   const [calendarError, setCalendarError] = useState("");
   const [calendarLoading, setCalendarLoading] = useState(false);
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authActionLoading, setAuthActionLoading] = useState(false);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionsLoaded, setSessionsLoaded] = useState(!supabase);
+  const [cloudError, setCloudError] = useState("");
+  const [cloudStatus, setCloudStatus] = useState("");
+  const [localImportCandidates, setLocalImportCandidates] = useState<Entry[]>([]);
+  const [localImportDone, setLocalImportDone] = useState(false);
+  const [importConfirmOpen, setImportConfirmOpen] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importMessage, setImportMessage] = useState("");
   const [showCalendar, setShowCalendar] = useState(true);
   const calendarScrollRef = useRef<HTMLDivElement>(null);
   const [showEntryForm, setShowEntryForm] = useState(false);
@@ -304,10 +366,10 @@ export default function App() {
   const [appearanceError, setAppearanceError] = useState("");
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
   const palette = THEMES[theme];
-  useEffect(
-    () => localStorage.setItem("studyday.entries", JSON.stringify(entries)),
-    [entries],
-  );
+  useEffect(() => {
+    if (!supabase)
+      localStorage.setItem("studyday.entries", JSON.stringify(entries));
+  }, [entries]);
   useEffect(
     () => localStorage.setItem("studyday.categories", JSON.stringify(categories)),
     [categories],
@@ -354,6 +416,125 @@ export default function App() {
     if (calendarScrollRef.current)
       calendarScrollRef.current.scrollTop = 7 * HOUR_HEIGHT;
   }, []);
+  useEffect(() => {
+    if (!supabase) {
+      setAuthLoading(false);
+      setCloudStatus("Local-only mode. Add Supabase environment variables to sync.");
+      return;
+    }
+    let active = true;
+    const auth = supabase.auth;
+    // Callback failures are returned by initialize(), not necessarily getSession().
+    void auth
+      .initialize()
+      .then(async ({ error }) => {
+        if (error) throw error;
+        return auth.getSession();
+      })
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error)
+          setCloudError(`Could not restore Supabase session: ${error.message}`);
+        setAuthUser(data.session?.user ?? null);
+        setAuthLoading(false);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setCloudError(
+          `Google sign-in or session restoration failed: ${error instanceof Error ? error.message : "Network error."}`,
+        );
+        setAuthLoading(false);
+      });
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+      setAuthUser(session?.user ?? null);
+      setAuthLoading(false);
+      if (session) setCloudError("");
+    });
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+  useEffect(() => {
+    setShowEntryForm(false);
+    setEditingEntryId(null);
+    setImportConfirmOpen(false);
+    setImportMessage("");
+    setLocalImportCandidates([]);
+    if (!supabase || !authUser) {
+      if (supabase) setEntries(loadEntries());
+      setSessionsLoading(false);
+      setSessionsLoaded(!supabase);
+      return;
+    }
+    let active = true;
+    setEntries([]);
+    const client = supabase;
+    setSessionsLoading(true);
+    setSessionsLoaded(false);
+    setCloudError("");
+    setCloudStatus("Loading your cloud sessions…");
+    let refreshing = false;
+    const refreshSessions = async () => {
+      if (refreshing || document.visibilityState === "hidden") return;
+      refreshing = true;
+      const revision = sessionRevision.current;
+      try {
+        const { data, error } = await client
+          .from("study_sessions")
+          .select("id,user_id,course,description,start_time,end_time,created_at")
+          .eq("user_id", authUser.id)
+          .order("start_time", { ascending: false });
+        if (!active || revision !== sessionRevision.current) return;
+        if (error) {
+          setCloudError(`Could not load study sessions: ${error.message}`);
+          setCloudStatus("Cloud sync needs attention");
+          return;
+        }
+        const rows = (data || []) as StudySessionRow[];
+        setEntries((current) => {
+          const statuses = new Map(current.map((entry) => [entry.id, entry.status]));
+          return rows.map((row) => ({
+            ...sessionRowToEntry(row),
+            status: statuses.get(row.id) || "draft",
+          }));
+        });
+        const localEntries = loadEntries();
+        setLocalImportCandidates(localEntries);
+        setLocalImportDone(
+          localStorage.getItem(`studyday.imported.${authUser.id}`) === "true",
+        );
+        setSessionsLoaded(true);
+        setCloudError("");
+        setCloudStatus("Synced");
+      } catch (error) {
+        if (!active) return;
+        setCloudError(
+          `Could not load study sessions: ${error instanceof Error ? error.message : "Network error."}`,
+        );
+        setCloudStatus("Cloud sync needs attention");
+      } finally {
+        refreshing = false;
+        if (active) setSessionsLoading(false);
+      }
+    };
+    const refreshVisibleSessions = () => void refreshSessions();
+    void refreshSessions();
+    const refreshInterval = window.setInterval(refreshVisibleSessions, 30_000);
+    window.addEventListener("focus", refreshVisibleSessions);
+    window.addEventListener("online", refreshVisibleSessions);
+    document.addEventListener("visibilitychange", refreshVisibleSessions);
+    return () => {
+      active = false;
+      window.clearInterval(refreshInterval);
+      window.removeEventListener("focus", refreshVisibleSessions);
+      window.removeEventListener("online", refreshVisibleSessions);
+      document.removeEventListener("visibilitychange", refreshVisibleSessions);
+    };
+  }, [authUser?.id]);
   const days = useMemo(
     () =>
       Array.from({ length: 7 }, (_, i) => {
@@ -414,47 +595,228 @@ export default function App() {
     setFormError("");
     setShowEntryForm(true);
   };
-  const addEntry = (event: React.FormEvent) => {
+  const saveStudySession = async (
+    entry: Entry,
+    isEditing: boolean,
+  ): Promise<boolean> => {
+    if (!supabase) {
+      setEntries((current) =>
+        isEditing
+          ? current.map((item) => (item.id === entry.id ? entry : item))
+          : [entry, ...current],
+      );
+      return true;
+    }
+    if (!authUser) {
+      setCloudError("Sign in with Google to save study sessions to Supabase.");
+      return false;
+    }
+    if (!sessionsLoaded) {
+      setCloudError("Wait for your Supabase sessions to finish loading.");
+      return false;
+    }
+
+    const row = entryToSessionRow(entry, authUser.id);
+    const fields = {
+      course: row.course,
+      description: row.description,
+      start_time: row.start_time,
+      end_time: row.end_time,
+    };
+    try {
+      const result = isEditing
+        ? await supabase
+            .from("study_sessions")
+            .update(fields)
+            .eq("id", entry.id)
+            .eq("user_id", authUser.id)
+            .select("id,user_id,course,description,start_time,end_time,created_at")
+            .single()
+        : await supabase
+            .from("study_sessions")
+            .insert(row)
+            .select("id,user_id,course,description,start_time,end_time,created_at")
+            .single();
+      if (result.error) {
+        setCloudError(`Could not save study session: ${result.error.message}`);
+        return false;
+      }
+      const savedEntry = sessionRowToEntry(result.data as StudySessionRow);
+      sessionRevision.current += 1;
+      setEntries((current) =>
+        isEditing
+          ? current.map((item) => (item.id === savedEntry.id ? savedEntry : item))
+          : [savedEntry, ...current],
+      );
+      setCloudError("");
+      setCloudStatus("Synced");
+      return true;
+    } catch (error) {
+      setCloudError(
+        `Could not save study session: ${error instanceof Error ? error.message : "Network error."}`,
+      );
+      return false;
+    }
+  };
+  const addEntry = async (event: React.FormEvent) => {
     event.preventDefault();
     if (minutes(end) <= minutes(start)) {
       setFormError("End time must be later than start time.");
       return;
     }
-    if (editingEntryId) {
-      setEntries((current) =>
-        current.map((entry) =>
-          entry.id === editingEntryId
-            ? { ...entry, date, course, start, end, notes: notes.trim(), status: "draft" }
-            : entry,
-        ),
-      );
-    } else {
-      setEntries((current) => [
-        {
-          id: crypto.randomUUID(),
-          date,
-          course,
-          start,
-          end,
-          notes: notes.trim(),
-          status: "draft",
-        },
-        ...current,
-      ]);
-    }
+    const entry: Entry = {
+      id: editingEntryId || crypto.randomUUID(),
+      date,
+      course,
+      start,
+      end,
+      notes: notes.trim(),
+      status: "draft",
+    };
+    if (!(await saveStudySession(entry, Boolean(editingEntryId)))) return;
     setNotes("");
     setEditingEntryId(null);
     setShowEntryForm(false);
     setWeek(monday(dateFrom(date)));
   };
-  const deleteEntry = (entryId: string) => {
+  const deleteEntry = async (entryId: string) => {
+    if (supabase) {
+      if (!authUser) {
+        setCloudError("Sign in with Google to delete cloud study sessions.");
+        return;
+      }
+      try {
+        const { error } = await supabase
+          .from("study_sessions")
+          .delete()
+          .eq("id", entryId)
+          .eq("user_id", authUser.id);
+        if (error) {
+          setCloudError(`Could not delete study session: ${error.message}`);
+          return;
+        }
+      } catch (error) {
+        setCloudError(
+          `Could not delete study session: ${error instanceof Error ? error.message : "Network error."}`,
+        );
+        return;
+      }
+      setCloudError("");
+      setCloudStatus("Synced");
+    }
+    sessionRevision.current += 1;
     setEntries((current) => current.filter((entry) => entry.id !== entryId));
     if (editingEntryId === entryId) {
       setEditingEntryId(null);
       setShowEntryForm(false);
     }
   };
-  const saveCategory = (event: React.FormEvent) => {
+  const signInWithGoogle = async () => {
+    if (!supabase) {
+      setCloudError("Supabase is not configured in this build.");
+      return;
+    }
+    setAuthActionLoading(true);
+    setCloudError("");
+    try {
+      const redirectTo = new URL(
+        import.meta.env.BASE_URL,
+        window.location.origin,
+      ).toString();
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo, skipBrowserRedirect: true },
+      });
+      if (error) throw error;
+      if (!data.url) throw new Error("Supabase did not return a Google sign-in URL.");
+      window.location.assign(data.url);
+    } catch (error) {
+      setCloudError(
+        `Google sign-in failed: ${error instanceof Error ? error.message : "Network error."}`,
+      );
+    } finally {
+      setAuthActionLoading(false);
+    }
+  };
+  const signOut = async () => {
+    if (!supabase) return;
+    setAuthActionLoading(true);
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        setCloudError(`Could not sign out: ${error.message}`);
+        return;
+      }
+      setEntries(loadEntries());
+      setCloudError("");
+      setCloudStatus("Signed out. Cloud sessions were not changed.");
+    } catch (error) {
+      setCloudError(
+        `Could not sign out: ${error instanceof Error ? error.message : "Network error."}`,
+      );
+    } finally {
+      setAuthActionLoading(false);
+    }
+  };
+  const importLocalSessions = async () => {
+    if (!supabase || !authUser) {
+      setCloudError("Sign in with Google before importing local sessions.");
+      return;
+    }
+    setImportLoading(true);
+    setCloudError("");
+    try {
+      const { data: existingRows, error: existingError } = await supabase
+        .from("study_sessions")
+        .select("id,user_id,course,description,start_time,end_time,created_at")
+        .eq("user_id", authUser.id);
+      if (existingError)
+        throw new Error(`Could not check for duplicate sessions: ${existingError.message}`);
+      const seen = new Set(
+        ((existingRows || []) as StudySessionRow[]).map(sessionRowKey),
+      );
+      const uniqueLocalEntries = localImportCandidates.filter((entry) => {
+        const key = localEntryKey(entry);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (uniqueLocalEntries.length === 0) {
+        localStorage.setItem(`studyday.imported.${authUser.id}`, "true");
+        setLocalImportDone(true);
+        setImportMessage("All local sessions already exist in Supabase.");
+        setImportConfirmOpen(false);
+        return;
+      }
+      const rows = uniqueLocalEntries.map((entry) =>
+        entryToSessionRow({ ...entry, id: crypto.randomUUID() }, authUser.id),
+      );
+      const { data: importedRows, error: importError } = await supabase
+        .from("study_sessions")
+        .insert(rows)
+        .select("id,user_id,course,description,start_time,end_time,created_at");
+      if (importError) throw new Error(importError.message);
+      const imported = ((importedRows || []) as StudySessionRow[]).map(
+        sessionRowToEntry,
+      );
+      sessionRevision.current += 1;
+      setEntries((current) => [...imported, ...current]);
+      localStorage.setItem(`studyday.imported.${authUser.id}`, "true");
+      setLocalImportDone(true);
+      setImportMessage(
+        `Imported ${imported.length} session${imported.length === 1 ? "" : "s"}. Your local copy was kept.`,
+      );
+      setCloudStatus("Synced");
+      setImportConfirmOpen(false);
+    } catch (error) {
+      setCloudError(
+        `Could not import local sessions: ${error instanceof Error ? error.message : "Network error."}`,
+      );
+    } finally {
+      setImportLoading(false);
+    }
+  };
+  const saveCategory = async (event: React.FormEvent) => {
     event.preventDefault();
     const oldName = editingCategory;
     const name = (oldName ? categoryNameDraft : newCategoryName).trim();
@@ -473,6 +835,24 @@ export default function App() {
       return;
     }
     if (oldName) {
+      if (supabase && oldName !== name) {
+        if (!authUser || !sessionsLoaded) {
+          setCategoryError("Sign in and wait for sessions to load before renaming a category.");
+          return;
+        }
+        try {
+          const { error } = await supabase
+            .from("study_sessions")
+            .update({ course: name })
+            .eq("user_id", authUser.id)
+            .eq("course", oldName);
+          if (error) throw error;
+        } catch (error) {
+          setCategoryError(`Could not rename category: ${error instanceof Error ? error.message : "Cloud update failed."}`);
+          return;
+        }
+      }
+      sessionRevision.current += 1;
       setCategories((current) =>
         current.map((category) => (category === oldName ? name : category)),
       );
@@ -559,7 +939,7 @@ export default function App() {
       ),
     );
   };
-  const stopTimer = () => {
+  const stopTimer = async () => {
     if (timerStarted === null) return;
     const from = new Date(timerStarted),
       to = new Date();
@@ -573,7 +953,7 @@ export default function App() {
       setTimerMessage("Keep the timer running for at least one minute.");
       return;
     }
-    setEntries((v) => [
+    const saved = await saveStudySession(
       {
         id: crypto.randomUUID(),
         date: d,
@@ -583,8 +963,9 @@ export default function App() {
         notes: notes.trim() || "Timed study session",
         status: "draft",
       },
-      ...v,
-    ]);
+      false,
+    );
+    if (!saved) return;
     setTimerStarted(null);
     setNotes("");
     setTimerMessage("");
@@ -780,6 +1161,8 @@ export default function App() {
     status?: string;
     href?: string;
     onEdit?: () => void;
+    lane: number;
+    laneCount: number;
   }) => {
     const startDate = new Date(item.start);
     const endDate = new Date(item.end);
@@ -795,11 +1178,15 @@ export default function App() {
     const visibleEnd = Math.min(endMinute, GRID_END * 60);
     if (visibleEnd <= visibleStart) return null;
     const style = {
+      left: `calc(${(item.lane / item.laneCount) * 100}% + 3px)`,
+      width: `calc(${Math.min(1.5 / item.laneCount, 1 - item.lane / item.laneCount) * 100}% - 6px)`,
+      right: "auto",
+      zIndex: 2 + item.lane,
       top: `${((visibleStart - GRID_START * 60) / 60) * HOUR_HEIGHT}px`,
       height: `${Math.max(28, ((visibleEnd - visibleStart) / 60) * HOUR_HEIGHT - 2)}px`,
       ...(item.color
         ? {
-            backgroundColor: `${item.color}24`,
+            backgroundColor: `color-mix(in srgb, ${item.color} 20%, white)`,
             borderLeftColor: item.color,
             color: readableText(item.color),
           }
@@ -808,6 +1195,7 @@ export default function App() {
     const className = `calendar-event ${item.kind === "study" ? "study-event" : "google-event"} ${item.status === "submitted" ? "is-submitted" : ""}`;
     const content = (
       <>
+        <b>{item.title}</b>
         <span>
           {(iso(startDate) < item.day
             ? new Date(`${item.day}T00:00:00`)
@@ -816,8 +1204,9 @@ export default function App() {
             hour: "numeric",
             minute: "2-digit",
           })}
+          {" – "}
+          {endDate.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
         </span>
-        <b>{item.title}</b>
         {item.kind === "study" && (
           <small>{item.status === "submitted" ? "Submitted" : "Draft"}</small>
         )}
@@ -909,8 +1298,18 @@ export default function App() {
           </button>
         </nav>
         <div className="sidebar-bottom">
-          <span className="status-dot" /> Personal study tracker{" "}
-            <small>Submission is local only</small>
+          <span className="status-dot" />
+          {authUser
+            ? "Study sessions sync to Supabase"
+            : supabase
+              ? "Local sessions"
+              : "Local-only mode"}
+          <small>
+            {authUser
+              ? "Goals, categories and appearance stay local"
+              : cloudStatus ||
+                (supabase ? "Sign in to sync sessions" : "Supabase is not configured")}
+          </small>
         </div>
       </aside>
       <main className="main">
@@ -932,11 +1331,49 @@ export default function App() {
             </p>
           </div>
           <div className="top-actions">
+            {authUser ? (
+              <button
+                className="secondary small"
+                onClick={() => void signOut()}
+                disabled={authActionLoading}
+              >
+                <LogOut size={14} /> {authActionLoading ? "Signing out…" : "Sign out"}
+              </button>
+            ) : (
+              <button
+                className="secondary small"
+                onClick={() => void signInWithGoogle()}
+                disabled={!supabase || authLoading || authActionLoading}
+              >
+                <Cloud size={14} />
+                {authLoading
+                  ? "Restoring session…"
+                  : !supabase
+                    ? "Supabase not configured"
+                    : authActionLoading
+                      ? "Opening Google…"
+                      : "Sign in with Google"}
+              </button>
+            )}
+            {authUser && localImportCandidates.length > 0 && !localImportDone && (
+              <button
+                className="secondary small"
+                onClick={() => {
+                  setImportMessage("");
+                  setImportConfirmOpen(true);
+                }}
+              >
+                <Download size={14} /> Import local sessions
+              </button>
+            )}
             <button className="secondary" onClick={exportCsv}>
               <Download size={16} /> Export CSV
             </button>
           </div>
         </header>
+        {cloudError && <p className="error cloud-error" role="alert">{cloudError}</p>}
+        {sessionsLoading && <p className="helper cloud-message" role="status">Loading your Supabase sessions…</p>}
+        {importMessage && <p className="helper cloud-message" role="status">{importMessage}</p>}
         {view !== "timesheet" && <section className="stats">
           <div className="stat">
             <span>HOURS THIS WEEK</span>
@@ -1160,8 +1597,7 @@ export default function App() {
                           />
                         ))}
                       </div>
-                      {dayEvents.map(renderCalendarItem)}
-                      {dayEntries.map(renderCalendarItem)}
+                      {layoutCalendarItems([...dayEvents, ...dayEntries]).map(renderCalendarItem)}
                     </div>
                   );
                 })}
@@ -1200,7 +1636,7 @@ export default function App() {
                 </button>
               </div>
               <p className="submission-note">
-                Submitting marks entries as submitted in this browser. It does not send hours to Workday.
+                Submission status is temporary; the Supabase table has no status column and this does not send hours to Workday.
               </p>
             </section>
             <aside className="panel summary-panel">
@@ -1505,7 +1941,13 @@ export default function App() {
         )}
         <footer>
           Studyday
-          <span>Entries are saved in this browser · No Workday connection configured</span>
+          <span>
+            {authUser
+              ? "Study sessions sync to Supabase · Goals, categories and appearance stay local"
+              : supabase
+                ? "Sign in to sync sessions · Local sessions remain available for import"
+                : "Sessions saved in this browser · Supabase is not configured"}
+          </span>
         </footer>
       </main>
       {showEntryForm && (
@@ -1893,6 +2335,58 @@ export default function App() {
                 </button>
               )}
               {appearanceError && <p className="error">{appearanceError}</p>}
+            </div>
+          </section>
+        </div>
+      )}
+      {importConfirmOpen && (
+        <div
+          className="modal-backdrop import-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !importLoading)
+              setImportConfirmOpen(false);
+          }}
+        >
+          <section
+            className="entry-modal import-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="import-title"
+          >
+            <div className="modal-heading">
+              <div>
+                <span className="eyebrow">ONE-TIME IMPORT</span>
+                <h2 id="import-title">Import local sessions?</h2>
+              </div>
+              <button
+                className="icon-button"
+                aria-label="Close import confirmation"
+                disabled={importLoading}
+                onClick={() => setImportConfirmOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <p className="import-description">
+              Import up to {localImportCandidates.length} sessions from this browser into the signed-in Supabase account. Existing duplicates will be skipped. Your local data will not be changed or deleted.
+            </p>
+            <div className="form-footer import-actions">
+              <button
+                className="secondary"
+                type="button"
+                disabled={importLoading}
+                onClick={() => setImportConfirmOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary"
+                type="button"
+                disabled={importLoading}
+                onClick={() => void importLocalSessions()}
+              >
+                {importLoading ? "Importing…" : "Import sessions"}
+              </button>
             </div>
           </section>
         </div>

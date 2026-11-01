@@ -26,13 +26,28 @@ Manage categories to create, rename, delete, and choose a color for each categor
 
 The Google access token is kept in memory, so reconnect after refreshing. Only the current selected week is fetched; the schedule scrolls through the full 24-hour day.
 
+## Supabase session sync
+
+1. For a new Supabase project, run [`supabase/schema.sql`](supabase/schema.sql) in the SQL Editor. If your `study_sessions` table and per-user RLS policies already exist, skip this step; this integration requires no additional SQL or Realtime publication.
+2. In **Authentication → Providers**, enable Google and configure the OAuth client. Add the callback URL shown by Supabase to the Google OAuth client's authorized redirect URIs.
+3. In **Authentication → URL Configuration**, allow `http://localhost:5173/` and `https://lureta.github.io/timeEntriesForStudying/` as redirect URLs.
+4. Copy `.env.example` to `.env.local` and set `VITE_SUPABASE_URL` plus `VITE_SUPABASE_PUBLISHABLE_KEY`. Never put a service-role key in the browser app.
+5. In GitHub repository **Settings → Secrets and variables → Actions**, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`. Add `VITE_GOOGLE_CLIENT_ID` too if the deployed app should show Google Calendar events.
+6. Use **Sign in with Google** in Studyday. Supabase login is separate from the optional Google Calendar connection.
+
+Legacy local sessions are not moved automatically. After sign-in, choose **Import local sessions** to review and import them; duplicates are skipped and the local copy is retained. The app does not sync goals, categories, category colors, or appearance settings because the provided schema has no corresponding tables. Submission status is also local-only because `study_sessions` has no status column.
+
 ## Deploy with GitHub Pages
 
 1. In the repository settings, open **Pages** and set the source to **GitHub Actions**.
 2. Push to `main`; `.github/workflows/deploy.yml` builds and deploys the site automatically.
-3. To enable Google Calendar on the deployed site, add a repository Actions secret named `VITE_GOOGLE_CLIENT_ID` and add the GitHub Pages origin to the OAuth client's authorized JavaScript origins.
+3. To enable Google Calendar on the deployed site, add a repository Actions secret named `VITE_GOOGLE_CLIENT_ID` and add the GitHub Pages origin to the OAuth client's authorized JavaScript origins. Add the Supabase secrets listed above for cloud sessions.
 
-Browser storage is scoped to the site origin. Entries saved on localhost will not automatically appear on the GitHub Pages origin, but entries created there persist in that browser across visits. Storage does not sync across devices.
+Appearance, goals, categories, and category colors remain in browser storage. They are scoped to the site origin and do not sync across devices. Supabase study sessions are available across devices after signing into the same account.
+
+While signed in, sessions refresh every 30 seconds while the page is visible, and when returning to the app or reconnecting. Submission status stays in memory for cloud sessions and resets on a full page reload. Google Calendar uses its own read-only authorization, separate from Supabase sign-in. For Calendar on GitHub Pages, add `https://lureta.github.io` to the Google OAuth client's authorized JavaScript origins (without the repository path).
+
+To verify an existing setup, sign in locally, create a uniquely named session, and check its row in Supabase's Table Editor. Refresh the app, then sign into the deployed app on another device using the same Google account. The session should appear; edits and deletions should appear on the other device within 30 seconds or when returning to its tab. Connect Google Calendar separately and confirm the selected week's events appear.
 
 ## Deploy with AWS Amplify
 
@@ -44,6 +59,6 @@ Browser storage is scoped to the site origin. Entries saved on localhost will no
 
 ## Important storage limitation
 
-Study entries are saved to **localStorage in the current browser only**. This means they survive page refreshes on that browser but **do not sync between your phone and laptop**, and can be lost if browser storage is cleared. The app is deployable as-is, but cross-device persistence requires an authenticated backend/database (such as Cognito + API Gateway/Lambda + DynamoDB). Do not mistake hosting for cloud data storage.
+When Supabase is configured, study sessions are saved in the authenticated user's `study_sessions` rows. Without Supabase configuration or while signed out, new cloud writes are unavailable; existing local sessions remain available for the explicit import flow. Browser-local goals, categories, and appearance settings can be lost if browser storage is cleared.
 
-Use **Export CSV** to back up entries until cloud storage is implemented.
+Use **Export CSV** to keep an independent backup of your entries.
