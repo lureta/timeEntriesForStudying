@@ -6,6 +6,40 @@ Just like employees clock in their hours at work, students can log their time st
 
 Plan your hours, submit your timesheet, and see where your time actually goes.
 
+Tech Stack
+
+Layer
+
+Technologies
+
+Frontend
+
+React, TypeScript, Vite
+
+Backend / Database
+
+Supabase, PostgreSQL
+
+Authentication
+
+Supabase Auth, Google OAuth 2.0
+
+External APIs
+
+Google Calendar API
+
+Cloud Hosting
+
+GitHub Pages
+
+CI/CD
+
+GitHub Actions
+
+Testing
+
+Node.js Test Runner
+
 ## Calendar and submission
 
 Click an hour to create a study entry, or drag across a time range to create a projected block. Click a block to edit its category, optional session name, time, and notes. **Save as projected** keeps it planned; **Submit hours** in the editor records it as actual. **Submit all projected hours** at the bottom of the calendar submits the week's projected entries together.
