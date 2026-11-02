@@ -8,12 +8,18 @@ Plan your hours, submit your timesheet, and see where your time actually goes.
 
 ## Tech Stack
 Frontend: React, TypeScript, Vite
+
 Backend / Database: Supabase, PostgreSQL
+
 Authentication: Supabase Auth, Google OAuth 2.0
+
 External APIs: Google Calendar API
+
 Cloud Hosting: GitHub Pages
+
 CI/CD: GitHub Actions
-Features
+
+## Features
 
 Timesheet Management
 
