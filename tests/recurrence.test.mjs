@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { repeatDates, recurringCategoryGoals } from '../src/services/recurrence.ts';
+import { repeatDates, recurringCategoryGoals, categoryGoalKey } from '../src/services/recurrence.ts';
 
 test('daily and weekly repeats include the end date', () => {
   assert.deepEqual(repeatDates('2026-11-02', '2026-11-04', 'daily', []), ['2026-11-02', '2026-11-03', '2026-11-04']);
@@ -23,4 +23,19 @@ test('category rules honor scope, weekdays, date limits and later changes', () =
   assert.deepEqual(recurringCategoryGoals([rule], 'day', '2026-11-13'), {});
   assert.deepEqual(recurringCategoryGoals([rule], 'week', '2026-11-02'), {});
   assert.deepEqual(recurringCategoryGoals([rule, {...rule,id:'2',hours:2,start:'2026-11-06'}], 'day', '2026-11-06'), {Reading:2});
+});
+
+test('recurring category targets remain isolated by parent goal', () => {
+ const base = {id:'legacy',category:'Reading',hours:1,scope:'day',start:'2026-11-02',until:'',days:[1]};
+ const rules = [base, {...base,id:'job',goalId:'job-hunt',hours:2}, {...base,id:'exam',goalId:'exams',hours:3}];
+ assert.deepEqual(recurringCategoryGoals(rules,'day','2026-11-02'), {Reading:1});
+ assert.deepEqual(recurringCategoryGoals(rules,'day','2026-11-02','job-hunt'), {Reading:2});
+ assert.deepEqual(recurringCategoryGoals(rules,'day','2026-11-02','exams'), {Reading:3});
+ assert.deepEqual(recurringCategoryGoals(rules,'day','2026-11-02','new-goal'), {});
+});
+
+test('per-date category goal keys isolate each parent and retain legacy defaults', () => {
+ assert.equal(categoryGoalKey('day','2026-11-02'), 'day:2026-11-02');
+ assert.notEqual(categoryGoalKey('day','2026-11-02','job'),categoryGoalKey('day','2026-11-02','exam'));
+ assert.notEqual(categoryGoalKey('day','2026-11-02','job'),categoryGoalKey('week','2026-11-02','job'));
 });

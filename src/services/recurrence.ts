@@ -1,5 +1,5 @@
 export type RepeatMode = "none" | "daily" | "weekly" | "custom";
-export type CategoryGoalRule = { id: string; category: string; hours: number; scope: "day" | "week"; start: string; until: string; days: number[] };
+export type CategoryGoalRule = { id: string; goalId?: string; category: string; hours: number; scope: "day" | "week"; start: string; until: string; days: number[] };
 export const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export const localDay = (value: string) => new Date(`${value}T12:00:00`);
 export const dateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -17,10 +17,14 @@ export function repeatDates(start: string, until: string, mode: RepeatMode, days
   if (!result.length) throw new Error("No selected weekdays fall within these dates.");
   return result;
 }
-export function recurringCategoryGoals(rules: CategoryGoalRule[], scope: "day" | "week", date: string) {
+export function recurringCategoryGoals(rules: CategoryGoalRule[], scope: "day" | "week", date: string, goalId = "default") {
   const result: Record<string, number> = {};
   for (const rule of rules) {
-    if (rule.scope === scope && rule.start <= date && (!rule.until || rule.until >= date) && (scope === "week" || rule.days.includes(localDay(date).getDay()))) result[rule.category] = rule.hours;
+    if ((rule.goalId || "default") === goalId && rule.scope === scope && rule.start <= date && (!rule.until || rule.until >= date) && (scope === "week" || rule.days.includes(localDay(date).getDay()))) result[rule.category] = rule.hours;
   }
   return result;
+}
+
+export function categoryGoalKey(scope: "day" | "week", date: string, goalId = "default") {
+  return goalId === "default" ? `${scope}:${date}` : `goal:${goalId}:${scope}:${date}`;
 }

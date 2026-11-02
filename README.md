@@ -91,3 +91,11 @@ When Supabase is configured, study sessions are saved in the authenticated user'
 Run sync checks with `node --experimental-strip-types --test tests/workspaceData.test.mjs tests/workspaceSync.test.mjs` (Node 22 or newer).
 
 Run all automated checks with `node --experimental-strip-types --test tests/*.test.mjs`, then `npm run build`. Recurrence tests cover weekday schedules, end dates, daylight-saving boundaries, and category-rule matching. Live account sync still needs verification with two signed-in browsers.
+
+### Additional daily and weekly goals
+
+In Analytics, use **Add goal** beside the **Display goal** picker at the top of the progress card to create a named target with hours and minutes. **All categories** contribute by default, including categories added later. Uncheck it or individual categories to choose a specific set. Choose a goal in **Display goal** to show its actual and projected progress in the same card. Only one goal is displayed at a time. Goals support optional recurrence and can be edited or deleted. Deleting a goal leaves sessions intact. Sessions can contribute to several goals; overall study totals still count each session once. Editing or deleting a recurring additional goal changes the whole goal, including its repeat settings. These goals sync per account in `user_settings` without a new migration.
+
+The Display goal selection is remembered separately for Day and Week and syncs to your account. “Where your study time went” uses only the selected goal’s contributing categories; its percentages are shares of their combined submitted time. If a selected goal does not apply to the chosen date, the default goal displays until that goal applies again.
+
+Category targets at the bottom of Analytics belong to the currently displayed goal. Adding, editing, deleting, copying, or repeating a category target affects only that parent goal. Existing targets remain attached to the original default daily/weekly goal.

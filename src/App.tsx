@@ -1,5 +1,8 @@
+import { goalApplies, entriesForGoal } from "./services/additionalGoals";
+import AdditionalGoals from "./components/AdditionalGoals";
+import type { StudyGoal } from "./components/AdditionalGoals";
 import RepeatControls from "./components/RepeatControls";
-import { repeatDates, recurringCategoryGoals, localDay, dateKey } from "./services/recurrence";
+import { repeatDates, recurringCategoryGoals, categoryGoalKey, localDay, dateKey } from "./services/recurrence";
 import type { RepeatMode, CategoryGoalRule } from "./services/recurrence";
 import StudyMusic from "./components/StudyMusic";
 import { formatDuration } from "./services/formatDuration";
@@ -448,6 +451,8 @@ export default function App() {
   const [inspirationNote, setInspirationNote] = useState(() => !supabase ? localStorage.getItem("studyday.inspiration.local") || "" : "");
   const [editingGoal, setEditingGoal] = useState(false);
   const [goalError, setGoalError] = useState("");
+  const [displayGoals, setDisplayGoals] = useState<Record<string, string>>(() => !supabase ? loadColorSetting("studyday.displayGoals", {}) : {});
+  const [additionalGoals, setAdditionalGoals] = useState<StudyGoal[]>(() => !supabase ? loadColorSetting("studyday.additionalGoals", []) : []);
   const [dailyGoalRules, setDailyGoalRules] = useState<CategoryGoalRule[]>(() => loadColorSetting("studyday.dailyGoalRules", []));
   const [dailyGoals, setDailyGoals] = useState<Record<string, number>>({});
   const [categoryGoalRules, setCategoryGoalRules] = useState<CategoryGoalRule[]>(() => loadColorSetting("studyday.categoryGoalRules", []));
@@ -620,9 +625,9 @@ export default function App() {
   };
   const workspace = { categories, categoryColors, goal, theme, wallpaper, wallpaperTint, wallpaperTintStrength, bannerColor,
     googleColorOverrides, useGoogleColors, googleEventColor, calendarPalette, savedCalendarThemes, calendarSeriesSlots,
-    savedAppearances, taskData, inspirationNote, focusPreferences, dailyGoals, categoryGoals, studyVideoUrl, categoryGoalRules, dailyGoalRules };
+    savedAppearances, taskData, inspirationNote, focusPreferences, dailyGoals, categoryGoals, studyVideoUrl, categoryGoalRules, dailyGoalRules, additionalGoals, displayGoals };
   const workspaceSync = useWorkspaceSync(authUser?.id, workspace, {
-    categories: DEFAULT_CATEGORIES, categoryColors: {}, goal: 20, dailyGoals: {}, dailyGoalRules: [], categoryGoals: {}, categoryGoalRules: [], studyVideoUrl: "", theme: "forest" as ThemeName, wallpaper: "", wallpaperTint: "#f5f5f5",
+    categories: DEFAULT_CATEGORIES, categoryColors: {}, goal: 20, dailyGoals: {}, dailyGoalRules: [], additionalGoals: [], displayGoals: {}, categoryGoals: {}, categoryGoalRules: [], studyVideoUrl: "", theme: "forest" as ThemeName, wallpaper: "", wallpaperTint: "#f5f5f5",
     wallpaperTintStrength: 82, bannerColor: "", googleColorOverrides: {}, useGoogleColors: true, googleEventColor: "#f8e9e2",
     calendarPalette: [...CATEGORY_THEMES.soft.colors], savedCalendarThemes: [], calendarSeriesSlots: {}, savedAppearances: [], taskData: { tasks: [] }, inspirationNote: "", focusPreferences: { mode: "countdown", duration: 30, focusMinutes: 25, breakMinutes: 5 },
   }, (value) => {
@@ -631,7 +636,7 @@ export default function App() {
     setBannerColor(value.bannerColor); setBannerColorInput(value.bannerColor || THEMES[value.theme].sidebar);
     setGoogleColorOverrides(value.googleColorOverrides); setUseGoogleColors(value.useGoogleColors); setGoogleEventColor(value.googleEventColor);
     setCalendarPalette(value.calendarPalette); setSavedCalendarThemes(value.savedCalendarThemes); setCalendarSeriesSlots(value.calendarSeriesSlots);
-    setSavedAppearances(value.savedAppearances); setAppearancesLoaded(true); setTaskData(value.taskData); setInspirationNote(value.inspirationNote); setFocusPreferences(value.focusPreferences); setDailyGoals(value.dailyGoals); setDailyGoalRules(value.dailyGoalRules); setCategoryGoals(value.categoryGoals); setCategoryGoalRules(value.categoryGoalRules); setStudyVideoUrl(value.studyVideoUrl);
+    setSavedAppearances(value.savedAppearances); setAppearancesLoaded(true); setTaskData(value.taskData); setInspirationNote(value.inspirationNote); setFocusPreferences(value.focusPreferences); setDisplayGoals(value.displayGoals); setAdditionalGoals(value.additionalGoals); setDailyGoals(value.dailyGoals); setDailyGoalRules(value.dailyGoalRules); setCategoryGoals(value.categoryGoals); setCategoryGoalRules(value.categoryGoalRules); setStudyVideoUrl(value.studyVideoUrl);
   }, async () => {
     const legacyNote = localStorage.getItem(`studyday.inspiration.${authUser?.id}`) || "";
     return { savedAppearances: await listAppearanceThemes(), taskData: loadColorSetting(`studyday.tasks.${authUser?.id}`, { tasks: [] }),
@@ -649,7 +654,9 @@ export default function App() {
     saveLocalSetting("studyday.studyVideoUrl", JSON.stringify(studyVideoUrl));
     saveLocalSetting("studyday.categoryGoalRules", JSON.stringify(categoryGoalRules));
     saveLocalSetting("studyday.dailyGoalRules", JSON.stringify(dailyGoalRules));
-  }, [taskData, inspirationNote, focusPreferences, studyVideoUrl, categoryGoalRules, dailyGoalRules]);
+    saveLocalSetting("studyday.additionalGoals", JSON.stringify(additionalGoals));
+    saveLocalSetting("studyday.displayGoals", JSON.stringify(displayGoals));
+  }, [taskData, inspirationNote, focusPreferences, studyVideoUrl, categoryGoalRules, dailyGoalRules, additionalGoals, displayGoals]);
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
   const palette = THEMES[theme];
   useEffect(() => {
@@ -814,9 +821,11 @@ export default function App() {
   );
   const draftEntries = weekEntries.filter((entry) => !entry.pending && entry.status !== "submitted");
   const total = weekEntries.reduce((sum, e) => sum + hours(e), 0);
-  const categoryGoalPeriod = `${categoryRange}:${categoryRange === "day" ? categoryDay : iso(week)}`;
+  const selectedAnalyticsGoal = additionalGoals.find((item) => item.id === displayGoals[categoryRange] && goalApplies(item, categoryRange, categoryRange === "day" ? categoryDay : iso(week)));
+  const categoryGoalOwner = selectedAnalyticsGoal?.id || "default";
+  const categoryGoalPeriod = categoryGoalKey(categoryRange, categoryRange === "day" ? categoryDay : iso(week), categoryGoalOwner);
   const dailyGoalTarget = dailyGoals[categoryDay] ?? recurringCategoryGoals(dailyGoalRules, "day", categoryDay).daily ?? 0;
-  const recurringGoals = recurringCategoryGoals(categoryGoalRules, categoryRange, categoryRange === "day" ? categoryDay : iso(week));
+  const recurringGoals = recurringCategoryGoals(categoryGoalRules, categoryRange, categoryRange === "day" ? categoryDay : iso(week), categoryGoalOwner);
   const currentCategoryGoals = Object.fromEntries(Object.entries({ ...recurringGoals, ...categoryGoals[categoryGoalPeriod] }).filter(([, value]) => value > 0));
   const categoryEntries = categoryRange === "day" ? entries.filter((entry) => entry.date === categoryDay) : weekEntries;
   const progressData = days.map((day) => {
@@ -830,8 +839,9 @@ export default function App() {
       target: Number((goal / 7).toFixed(2)),
     };
   });
-  const categoryBreakdown = [...new Set(categoryEntries.map((entry) => entry.course))].map((name) => ({
-    name, hours: categoryEntries.filter((entry) => entry.course === name && entry.status === "submitted").reduce((sum, entry) => sum + hours(entry), 0),
+  const breakdownEntries = entriesForGoal(categoryEntries, selectedAnalyticsGoal);
+  const categoryBreakdown = [...new Set(breakdownEntries.map((entry) => entry.course))].map((name) => ({
+    name, hours: breakdownEntries.filter((entry) => entry.course === name && entry.status === "submitted").reduce((sum, entry) => sum + hours(entry), 0),
     color: categoryColors[name] || COLORS[Math.max(0, categories.indexOf(name)) % COLORS.length],
   })).filter((category) => category.hours > 0).sort((a, b) => b.hours - a.hours);
   const periodMetrics = studyMetrics(categoryEntries);
@@ -1962,7 +1972,8 @@ export default function App() {
         {view === "analytics" && (
           <div className="analytics-grid day-analytics">
 
-            <section className="panel daily-goal-unified" aria-label={categoryRange === "day" ? "Daily study progress" : "Weekly study progress"}>
+            <AdditionalGoals key={`${authUser?.id || "local"}:${categoryRange}:${categoryDay}:${iso(week)}`} displayId={displayGoals[categoryRange] || "default"} onDisplayChange={(id) => { setDisplayGoals((current) => ({ ...current, [categoryRange]: id })); setNewGoalCategory(""); setCategoryGoalError(""); setCategoryGoalMessage(""); setGoalRepeat("none"); }} goals={additionalGoals} onChange={setAdditionalGoals} scope={categoryRange} date={categoryRange === "day" ? categoryDay : iso(week)} categories={categories} entries={categoryEntries} color={chartColor}>
+            <section className="daily-goal-unified" aria-label={categoryRange === "day" ? "Daily study progress" : "Weekly study progress"}>
               <div className="daily-goal-card-heading"><h2>{categoryRange === "day" ? "Daily study progress" : "Weekly study progress"}</h2>
                 <p>{categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : `${days[0].toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${days[6].toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`}</p></div>
               <div className="daily-goal-summary">
@@ -1982,6 +1993,7 @@ export default function App() {
               </div>
               <div className="daily-goal-ring-area"><HoursGoalChart label={categoryRange === "day" ? "Daily progress" : "Weekly progress"} actual={dailyHoursTotal} projected={periodMetrics.projected} goal={categoryRange === "day" ? dailyGoalTarget : goal} color={chartColor} height={240} showCaption={false} /></div>
             </section>
+            </AdditionalGoals>
             {categoryRange === "week" && <section className="panel progress-chart-panel">
               <div className="panel-heading"><div><h2>Study hours by day</h2><p>Daily totals compared with your weekly goal’s daily pace</p></div><ChartColumn size={20} /></div>
               <div className="chart-frame"><ResponsiveContainer width="100%" height={280}>
@@ -1996,10 +2008,10 @@ export default function App() {
               <div className="chart-key"><span><i style={{ background: chartColor }} /> Study hours</span><span><i style={{ background: chartGoalColor }} /> Average daily pace</span></div>
             </section>}
             <div className="analytics-side">
-              <CategoryBreakdown categories={categoryBreakdown} period={categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString() : `the week of ${dateFrom(iso(week)).toLocaleDateString()}`} />
+              <CategoryBreakdown goalName={selectedAnalyticsGoal?.name} categories={categoryBreakdown} period={categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString() : `the week of ${dateFrom(iso(week)).toLocaleDateString()}`} />
               <section className="panel category-goals-panel">
           <div className="panel-heading"><div><h2>{categoryRange === "day" ? "Categories studied today" : "Categories studied this week"}</h2>
-            <p>Set hours for each category for {categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString() : `the week of ${dateFrom(iso(week)).toLocaleDateString()}`}. Daily and weekly targets are saved separately.</p></div></div>
+            <p>Set hours for each category for {categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString() : `the week of ${dateFrom(iso(week)).toLocaleDateString()}`}. Targets belong to {selectedAnalyticsGoal?.name || (categoryRange === "day" ? "your daily goal" : "your weekly goal")}.</p></div></div>
           <form className="category-goal-add" onSubmit={(event) => {
             event.preventDefault(); const value = Number(newCategoryGoalHours);
             if (!newGoalCategory || !categories.includes(newGoalCategory)) { setCategoryGoalError("Choose a category."); return; }
@@ -2010,13 +2022,13 @@ export default function App() {
               const selectedDays = goalRepeat === "daily" ? [0, 1, 2, 3, 4, 5, 6] : goalRepeat === "weekly" ? [localDay(anchor).getDay()] : goalRepeatDays;
               if (categoryRange === "day" && !selectedDays.length) { setCategoryGoalError("Choose at least one weekday."); return; }
               if (goalRepeatUntil && goalRepeatUntil < anchor) { setCategoryGoalError("End date must be on or after the selected date."); return; }
-              setCategoryGoalRules((current) => [...current, { id: crypto.randomUUID(), category: newGoalCategory, hours: value, scope: categoryRange, start: anchor, until: goalRepeatUntil, days: selectedDays }]);
+              setCategoryGoalRules((current) => [...current, { id: crypto.randomUUID(), category: newGoalCategory, goalId: categoryGoalOwner, hours: value, scope: categoryRange, start: anchor, until: goalRepeatUntil, days: selectedDays }]);
               setCategoryGoals((current) => { const period = { ...current[categoryGoalPeriod] }; delete period[newGoalCategory]; return { ...current, [categoryGoalPeriod]: period }; });
             } else setCategoryGoals((current) => ({ ...current, [categoryGoalPeriod]: { ...current[categoryGoalPeriod], [newGoalCategory]: value } }));
             setNewGoalCategory(""); setNewCategoryGoalHours("1"); setCategoryGoalError(""); setGoalRepeat("none"); setCategoryGoalMessage("Category goal saved.");
           }}>
             <label>Category<select required value={newGoalCategory} onChange={(event) => setNewGoalCategory(event.target.value)}>
-              <option value="">Choose a category</option>{categories.filter((category) => !currentCategoryGoals[category] || category === newGoalCategory).map((category) => <option key={category}>{category}</option>)}
+              <option value="">Choose a category</option>{categories.filter((category) => (!selectedAnalyticsGoal || selectedAnalyticsGoal.categories === null || selectedAnalyticsGoal.categories.includes(category)) && (!currentCategoryGoals[category] || category === newGoalCategory)).map((category) => <option key={category}>{category}</option>)}
             </select></label>
             <label>Goal hours<input required type="number" min="0.25" max={categoryRange === "day" ? 24 : 168} step="0.25" value={newCategoryGoalHours} onChange={(event) => setNewCategoryGoalHours(event.target.value)} /></label>
             <RepeatControls mode={goalRepeat} days={goalRepeatDays} until={goalRepeatUntil} onMode={setGoalRepeat} onDays={setGoalRepeatDays} onUntil={setGoalRepeatUntil} weeklyOnly={categoryRange === "week"} minDate={categoryRange === "day" ? categoryDay : iso(week)} />
@@ -2024,8 +2036,8 @@ export default function App() {
           </form>
           {categoryGoalError && <p className="error" role="alert">{categoryGoalError}</p>}
           {categoryGoalMessage && <p className="helper" role="status">{categoryGoalMessage}</p>}
-          {!categoryEntries.length && !Object.keys(currentCategoryGoals).length && <p className="helper">Your categories will appear here when you log study time. You can also add a category goal above.</p>}
-          <div className="category-goals-grid">{[...new Set([...categoryEntries.map((entry) => entry.course), ...Object.keys(currentCategoryGoals)])].map((category) => {
+          {!Object.keys(currentCategoryGoals).some((category) => !selectedAnalyticsGoal || selectedAnalyticsGoal.categories === null || selectedAnalyticsGoal.categories.includes(category)) && <p className="helper">Add a category goal above to track it here.</p>}
+          <div className="category-goals-grid">{Object.keys(currentCategoryGoals).filter((category) => !selectedAnalyticsGoal || selectedAnalyticsGoal.categories === null || selectedAnalyticsGoal.categories.includes(category)).map((category) => {
             const target = currentCategoryGoals[category] || 0;
             const metrics = studyMetrics(categoryEntries.filter((entry) => entry.course === category));
             const actual = metrics.actual;
@@ -2037,15 +2049,15 @@ export default function App() {
               {target > 0 && <div className="category-repeat-actions">
                 <button type="button" className="secondary small" onClick={() => {
                   const next = localDay(categoryRange === "day" ? categoryDay : iso(week)); next.setDate(next.getDate() + (categoryRange === "day" ? 1 : 7));
-                  const nextKey = `${categoryRange}:${dateKey(next)}`;
-                  const existing = { ...recurringCategoryGoals(categoryGoalRules, categoryRange, dateKey(next)), ...categoryGoals[nextKey] };
+                  const nextKey = categoryGoalKey(categoryRange, dateKey(next), categoryGoalOwner);
+                  const existing = { ...recurringCategoryGoals(categoryGoalRules, categoryRange, dateKey(next), categoryGoalOwner), ...categoryGoals[nextKey] };
                   if (existing[category] > 0) { setCategoryGoalError(`This category already has a goal for the next ${categoryRange}.`); return; }
                   setCategoryGoals((current) => ({ ...current, [nextKey]: { ...current[nextKey], [category]: target } }));
                   setCategoryGoalError(""); setCategoryGoalMessage(`Goal copied to ${dateKey(next)}.`);
                 }}>Copy to next {categoryRange}</button>
                 <button type="button" className="secondary small" onClick={() => { setNewGoalCategory(category); setNewCategoryGoalHours(String(target)); setGoalRepeat(categoryRange === "week" ? "weekly" : "daily"); setGoalRepeatUntil(""); }}>Make recurring</button>
-                {categoryGoalRules.some((rule) => rule.scope === categoryRange && rule.category === category) && <button type="button" className="secondary small" onClick={() => setCategoryGoalRules((current) => current.map((rule) => {
-                  if (rule.scope !== categoryRange || rule.category !== category) return rule;
+                {categoryGoalRules.some((rule) => (rule.goalId || "default") === categoryGoalOwner && rule.scope === categoryRange && rule.category === category) && <button type="button" className="secondary small" onClick={() => setCategoryGoalRules((current) => current.map((rule) => {
+                  if ((rule.goalId || "default") !== categoryGoalOwner || rule.scope !== categoryRange || rule.category !== category) return rule;
                   const previous = localDay(categoryRange === "day" ? categoryDay : iso(week)); previous.setDate(previous.getDate() - 1);
                   const until = dateKey(previous); return { ...rule, until: rule.until && rule.until < until ? rule.until : until };
                 }))}>Stop repeating</button>}

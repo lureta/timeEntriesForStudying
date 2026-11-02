@@ -5,8 +5,8 @@ import { formatDuration } from "../services/formatDuration";
 import HoursGoalChart from "./HoursGoalChart";
 import { useState } from "react";
 import { Pencil } from "lucide-react";
-export default function GoalProgress({ label, target, actual, max, onSave, horizontal = false, compact = false, color, chartMax, periodTotal, projected, repeatDate, onSaveRepeat, onStopRepeat }: {
-  onStopRepeat?: () => void; repeatDate?: string; onSaveRepeat?: (value: number, mode: RepeatMode, days: number[], until: string) => void; label: string; target: number; actual: number; max: number; horizontal?: boolean; compact?: boolean; color?: string; chartMax?: number; periodTotal?: number; projected?: number; onSave: (value: number) => void;
+export default function GoalProgress({ label, target, actual, max, onSave, horizontal = false, compact = false, color, chartMax, periodTotal, projected, repeatDate, onSaveRepeat, onStopRepeat, onEdit }: {
+  onEdit?: () => void; onStopRepeat?: () => void; repeatDate?: string; onSaveRepeat?: (value: number, mode: RepeatMode, days: number[], until: string) => void; label: string; target: number; actual: number; max: number; horizontal?: boolean; compact?: boolean; color?: string; chartMax?: number; periodTotal?: number; projected?: number; onSave: (value: number) => void;
 }) {
   const [repeat, setRepeat] = useState<RepeatMode>("none");
   const [repeatDays, setRepeatDays] = useState([1, 3, 5]);
@@ -15,6 +15,7 @@ export default function GoalProgress({ label, target, actual, max, onSave, horiz
   const [draft, setDraft] = useState(String(Math.floor(Math.round(target * 60) / 60)));
   const [draftMinutes, setDraftMinutes] = useState(String(Math.round(target * 60) % 60));
   const beginEditing = () => {
+    if (onEdit) { onEdit(); return; }
     const total = Math.round(target * 60); setDraft(String(Math.floor(total / 60))); setDraftMinutes(String(total % 60)); setEditing(true); setRepeat("none"); setRepeatUntil(""); setError("");
   };
   const [error, setError] = useState('');
