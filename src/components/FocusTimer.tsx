@@ -143,6 +143,6 @@ export default function FocusTimer({ categories, onSave, preferences, onPreferen
       {started && <button className="secondary small" type="button" disabled={saving} onClick={() => { resetPhase(phase === "break" ? breakMinutes : mode === "pomodoro" ? focusMinutes : duration, phase); setMessage("Unsaved time discarded."); }}>Discard timer</button>}
     </div>
     {message && <p className="timer-hint" role="status">{message}</p>}
-    <p className="helper focus-reminder">Keep this page open while studying. Each paused block is saved separately; leaving or refreshing the page resets an unsaved timer.</p>
+    <p className="helper focus-reminder">Saved time is added to your calendar automatically.</p>
   </section>;
 }

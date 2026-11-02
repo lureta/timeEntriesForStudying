@@ -33,6 +33,5 @@ export default function StudyTasks({ data, setData }: { data: { tasks: Task[] };
         <button className="icon-button" aria-label={`Delete ${task.title}`} onClick={() => { setData((current) => ({ ...current, tasks: current.tasks.filter((item) => item.id !== task.id) })); if (editingTask === task.id) clearTask(); }}><Trash2 size={14} /></button>
       </div>)}
     </section>
-    <p className="helper">Tasks sync to your account.</p>
   </div>;
 }

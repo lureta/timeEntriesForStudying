@@ -1,3 +1,7 @@
+import RepeatControls from "./components/RepeatControls";
+import { repeatDates, recurringCategoryGoals, localDay, dateKey } from "./services/recurrence";
+import type { RepeatMode, CategoryGoalRule } from "./services/recurrence";
+import StudyMusic from "./components/StudyMusic";
 import { formatDuration } from "./services/formatDuration";
 import { studyMetrics } from "./services/studyMetrics";
 import CategoryBreakdown from "./components/CategoryBreakdown";
@@ -221,6 +225,42 @@ const THEMES = {
     submittedBorder: "#60896b",
     submittedText: "#344f3a",
   },
+  lavender: {
+    label: "Lavender",
+    background: "https://images.unsplash.com/photo-1499002238440-d264edd596ec?auto=format&fit=crop&w=2400&q=80",
+    sidebar: "#49405f", sidebarActive: "#625477",
+    primary: "#806c9b", primaryHover: "#69567f", highlight: "#e4d5f4",
+    logoBackground: "#625477", logoForeground: "#e4d5f4",
+    studyBackground: "#eee8f5", studyBorder: "#a995c2", studyText: "#453657",
+    submittedBackground: "#eee8f5", submittedBorder: "#806c9b", submittedText: "#453657",
+  },
+  rose: {
+    label: "Rose",
+    background: "https://images.unsplash.com/photo-1496062031456-07b8f162a322?auto=format&fit=crop&w=2400&q=80",
+    sidebar: "#643f4d", sidebarActive: "#805564",
+    primary: "#ad7186", primaryHover: "#915c6f", highlight: "#ffd1dc",
+    logoBackground: "#805564", logoForeground: "#ffd1dc",
+    studyBackground: "#fae8ee", studyBorder: "#c88da0", studyText: "#603b48",
+    submittedBackground: "#fae8ee", submittedBorder: "#ad7186", submittedText: "#603b48",
+  },
+  sage: {
+    label: "Sage",
+    background: "https://images.unsplash.com/photo-1472396961693-142e6e269027?auto=format&fit=crop&w=2400&q=80",
+    sidebar: "#3d5043", sidebarActive: "#566b5b",
+    primary: "#738c71", primaryHover: "#5c735b", highlight: "#dce8bf",
+    logoBackground: "#566b5b", logoForeground: "#dce8bf",
+    studyBackground: "#edf2e5", studyBorder: "#99ad83", studyText: "#3e5138",
+    submittedBackground: "#edf2e5", submittedBorder: "#738c71", submittedText: "#3e5138",
+  },
+  midnight: {
+    label: "Midnight",
+    background: "https://images.unsplash.com/photo-1477346611705-65d1883cee1e?auto=format&fit=crop&w=2400&q=80",
+    sidebar: "#252e48", sidebarActive: "#3a4666",
+    primary: "#62769e", primaryHover: "#4f6085", highlight: "#c7d5f2",
+    logoBackground: "#3a4666", logoForeground: "#c7d5f2",
+    studyBackground: "#e7ecf5", studyBorder: "#8b9dbd", studyText: "#35415c",
+    submittedBackground: "#e7ecf5", submittedBorder: "#62769e", submittedText: "#35415c",
+  },
 } as const;
 type ThemeName = keyof typeof THEMES;
 const iso = (date: Date) =>
@@ -391,6 +431,7 @@ export default function App() {
   const [newGoalCategory, setNewGoalCategory] = useState("");
   const [newCategoryGoalHours, setNewCategoryGoalHours] = useState("1");
   const [categoryGoalError, setCategoryGoalError] = useState("");
+  const [categoryGoalMessage, setCategoryGoalMessage] = useState("");
   const [week, setWeek] = useState(() => monday(new Date()));
   const [course, setCourse] = useState(DEFAULT_CATEGORIES[0]);
   const [date, setDate] = useState(iso(new Date()));
@@ -401,12 +442,23 @@ export default function App() {
   const [goal, setGoal] = useState(() =>
     Number(localStorage.getItem("studyday.goal") || 20),
   );
+  const [studyVideoUrl, setStudyVideoUrl] = useState(() => loadColorSetting<string>("studyday.studyVideoUrl", ""));
   const [focusPreferences, setFocusPreferences] = useState<FocusPreferences>(() => loadColorSetting("studyday.focusPreferences", { mode: "countdown", duration: 30, focusMinutes: 25, breakMinutes: 5 }));
   const [taskData, setTaskData] = useState<{ tasks: Task[] }>(() => !supabase ? loadColorSetting("studyday.tasks.local", { tasks: [] }) : { tasks: [] });
   const [inspirationNote, setInspirationNote] = useState(() => !supabase ? localStorage.getItem("studyday.inspiration.local") || "" : "");
   const [editingGoal, setEditingGoal] = useState(false);
   const [goalError, setGoalError] = useState("");
+  const [dailyGoalRules, setDailyGoalRules] = useState<CategoryGoalRule[]>(() => loadColorSetting("studyday.dailyGoalRules", []));
   const [dailyGoals, setDailyGoals] = useState<Record<string, number>>({});
+  const [categoryGoalRules, setCategoryGoalRules] = useState<CategoryGoalRule[]>(() => loadColorSetting("studyday.categoryGoalRules", []));
+  const [goalRepeat, setGoalRepeat] = useState<RepeatMode>("none");
+  const [goalRepeatDays, setGoalRepeatDays] = useState<number[]>([1, 3, 5]);
+  const [goalRepeatUntil, setGoalRepeatUntil] = useState("");
+  const [entryRepeat, setEntryRepeat] = useState<RepeatMode>("none");
+  const [entryRepeatDays, setEntryRepeatDays] = useState<number[]>([1, 3, 5]);
+  const [entryRepeatUntil, setEntryRepeatUntil] = useState("");
+  const [entrySaving, setEntrySaving] = useState(false);
+  const entrySaveLock = useRef(false);
   const [categoryGoals, setCategoryGoals] = useState<Record<string, Record<string, number>>>({});
   const [goalInput, setGoalInput] = useState(() => String(goal));
 
@@ -568,9 +620,9 @@ export default function App() {
   };
   const workspace = { categories, categoryColors, goal, theme, wallpaper, wallpaperTint, wallpaperTintStrength, bannerColor,
     googleColorOverrides, useGoogleColors, googleEventColor, calendarPalette, savedCalendarThemes, calendarSeriesSlots,
-    savedAppearances, taskData, inspirationNote, focusPreferences, dailyGoals, categoryGoals };
+    savedAppearances, taskData, inspirationNote, focusPreferences, dailyGoals, categoryGoals, studyVideoUrl, categoryGoalRules, dailyGoalRules };
   const workspaceSync = useWorkspaceSync(authUser?.id, workspace, {
-    categories: DEFAULT_CATEGORIES, categoryColors: {}, goal: 20, dailyGoals: {}, categoryGoals: {}, theme: "forest" as ThemeName, wallpaper: "", wallpaperTint: "#f5f5f5",
+    categories: DEFAULT_CATEGORIES, categoryColors: {}, goal: 20, dailyGoals: {}, dailyGoalRules: [], categoryGoals: {}, categoryGoalRules: [], studyVideoUrl: "", theme: "forest" as ThemeName, wallpaper: "", wallpaperTint: "#f5f5f5",
     wallpaperTintStrength: 82, bannerColor: "", googleColorOverrides: {}, useGoogleColors: true, googleEventColor: "#f8e9e2",
     calendarPalette: [...CATEGORY_THEMES.soft.colors], savedCalendarThemes: [], calendarSeriesSlots: {}, savedAppearances: [], taskData: { tasks: [] }, inspirationNote: "", focusPreferences: { mode: "countdown", duration: 30, focusMinutes: 25, breakMinutes: 5 },
   }, (value) => {
@@ -579,7 +631,7 @@ export default function App() {
     setBannerColor(value.bannerColor); setBannerColorInput(value.bannerColor || THEMES[value.theme].sidebar);
     setGoogleColorOverrides(value.googleColorOverrides); setUseGoogleColors(value.useGoogleColors); setGoogleEventColor(value.googleEventColor);
     setCalendarPalette(value.calendarPalette); setSavedCalendarThemes(value.savedCalendarThemes); setCalendarSeriesSlots(value.calendarSeriesSlots);
-    setSavedAppearances(value.savedAppearances); setAppearancesLoaded(true); setTaskData(value.taskData); setInspirationNote(value.inspirationNote); setFocusPreferences(value.focusPreferences); setDailyGoals(value.dailyGoals); setCategoryGoals(value.categoryGoals);
+    setSavedAppearances(value.savedAppearances); setAppearancesLoaded(true); setTaskData(value.taskData); setInspirationNote(value.inspirationNote); setFocusPreferences(value.focusPreferences); setDailyGoals(value.dailyGoals); setDailyGoalRules(value.dailyGoalRules); setCategoryGoals(value.categoryGoals); setCategoryGoalRules(value.categoryGoalRules); setStudyVideoUrl(value.studyVideoUrl);
   }, async () => {
     const legacyNote = localStorage.getItem(`studyday.inspiration.${authUser?.id}`) || "";
     return { savedAppearances: await listAppearanceThemes(), taskData: loadColorSetting(`studyday.tasks.${authUser?.id}`, { tasks: [] }),
@@ -594,7 +646,10 @@ export default function App() {
     saveLocalSetting("studyday.tasks.local", JSON.stringify(taskData));
     saveLocalSetting("studyday.inspiration.local", inspirationNote);
     saveLocalSetting("studyday.focusPreferences", JSON.stringify(focusPreferences));
-  }, [taskData, inspirationNote, focusPreferences]);
+    saveLocalSetting("studyday.studyVideoUrl", JSON.stringify(studyVideoUrl));
+    saveLocalSetting("studyday.categoryGoalRules", JSON.stringify(categoryGoalRules));
+    saveLocalSetting("studyday.dailyGoalRules", JSON.stringify(dailyGoalRules));
+  }, [taskData, inspirationNote, focusPreferences, studyVideoUrl, categoryGoalRules, dailyGoalRules]);
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
   const palette = THEMES[theme];
   useEffect(() => {
@@ -760,7 +815,9 @@ export default function App() {
   const draftEntries = weekEntries.filter((entry) => !entry.pending && entry.status !== "submitted");
   const total = weekEntries.reduce((sum, e) => sum + hours(e), 0);
   const categoryGoalPeriod = `${categoryRange}:${categoryRange === "day" ? categoryDay : iso(week)}`;
-  const currentCategoryGoals = categoryGoals[categoryGoalPeriod] || {};
+  const dailyGoalTarget = dailyGoals[categoryDay] ?? recurringCategoryGoals(dailyGoalRules, "day", categoryDay).daily ?? 0;
+  const recurringGoals = recurringCategoryGoals(categoryGoalRules, categoryRange, categoryRange === "day" ? categoryDay : iso(week));
+  const currentCategoryGoals = Object.fromEntries(Object.entries({ ...recurringGoals, ...categoryGoals[categoryGoalPeriod] }).filter(([, value]) => value > 0));
   const categoryEntries = categoryRange === "day" ? entries.filter((entry) => entry.date === categoryDay) : weekEntries;
   const progressData = days.map((day) => {
     const key = iso(day);
@@ -789,6 +846,7 @@ export default function App() {
   const openEntryForm = (day: string, hour = 9) => {
     setEditingEntryId(null);
     setSessionName("");
+    setEntryRepeat("none"); setEntryRepeatUntil("");
     setDate(day);
     setStart(`${String(hour).padStart(2, "0")}:00`);
     setEnd(
@@ -800,6 +858,7 @@ export default function App() {
     setShowEntryForm(true);
   };
   const openEditEntry = (entry: Entry) => {
+    setEntryRepeat("none"); setEntryRepeatUntil("");
     setEditingEntryId(entry.id);
     setDate(entry.date);
     setCourse(entry.course);
@@ -877,25 +936,29 @@ export default function App() {
   };
   const addEntry = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (minutes(end) <= minutes(start)) {
-      setFormError("End time must be later than start time.");
-      return;
-    }
-    const entry: Entry = {
-      id: editingEntryId || crypto.randomUUID(),
-      date,
-      course,
-      start,
-      end,
-      notes: notes.trim(),
-      name: sessionName.trim(),
-      status: ((event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null)?.value === "submit-hours" ? "submitted" : "draft",
-    };
-    if (!(await saveStudySession(entry, Boolean(editingEntryId)))) return;
-    setNotes("");
-    setEditingEntryId(null);
-    setShowEntryForm(false);
-    setWeek(monday(dateFrom(date)));
+    if (entrySaveLock.current) return;
+    if (minutes(end) <= minutes(start)) { setFormError("End time must be later than start time."); return; }
+    const requestedStatus: "draft" | "submitted" = ((event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null)?.value === "submit-hours" ? "submitted" : "draft";
+    const entry: Entry = { id: editingEntryId || crypto.randomUUID(), date, course, start, end, notes: notes.trim(), name: sessionName.trim(), status: requestedStatus };
+    entrySaveLock.current = true; setEntrySaving(true); setFormError("");
+    try {
+      if (!editingEntryId && entryRepeat !== "none") {
+        const dates = repeatDates(date, entryRepeatUntil, entryRepeat, entryRepeatDays);
+        const copies = dates.filter((day) => !entries.some((existing) => existing.date === day && existing.course === entry.course && existing.start === start && existing.end === end && (existing.name || "") === (entry.name || "") && existing.notes === entry.notes))
+          .map((day): Entry => ({ ...entry, id: crypto.randomUUID(), date: day, status: day === date ? requestedStatus : "draft" as const }));
+        if (!copies.length) throw new Error("Matching study sessions already exist for all selected dates.");
+        if (supabase) {
+          if (!authUser || !sessionsLoaded) throw new Error("Sign in and wait for sessions to load.");
+          const { data, error } = await supabase.from("study_sessions").insert(copies.map((copy) => entryToSessionRow(copy, authUser.id)))
+            .select("id,user_id,course,description,start_time,end_time,created_at,status,session_name");
+          if (error) throw error;
+          sessionRevision.current += 1;
+          setEntries((current) => [...(data || []).map((row) => sessionRowToEntry(row as StudySessionRow)), ...current]);
+        } else setEntries((current) => [...copies, ...current]);
+      } else if (!(await saveStudySession(entry, Boolean(editingEntryId)))) return;
+      setNotes(""); setEditingEntryId(null); setShowEntryForm(false); setWeek(monday(dateFrom(date)));
+    } catch (error) { setFormError((error as { message?: string })?.message || "Could not save recurring sessions."); }
+    finally { entrySaveLock.current = false; setEntrySaving(false); }
   };
   const pasteDay = async (targetDate: string) => {
     if (!copiedDay || pasteLock.current) return;
@@ -1053,6 +1116,11 @@ export default function App() {
         if (oldName !== name) delete updated[oldName];
         return updated;
       });
+      setCategoryGoalRules((current) => current.map((rule) => rule.category === oldName ? { ...rule, category: name } : rule));
+      setCategoryGoals((current) => Object.fromEntries(Object.entries(current).map(([period, goals]) => {
+        const renamed = { ...goals }; if (oldName in renamed) { renamed[name] = renamed[oldName]; if (oldName !== name) delete renamed[oldName]; }
+        return [period, renamed];
+      })));
       if (course === oldName) setCourse(name);
       setEditingCategory(null);
       setCategoryNameDraft("");
@@ -1503,7 +1571,7 @@ export default function App() {
               {authLoading ? "Restoring your session…" : authActionLoading ? "Opening Google…" : "Continue with Google"}
             </button>
         {cloudError && <p className="error" role="alert">{cloudError}</p>}
-            <small>{welcomeMode === "signin" ? "Use the Google account you study with." : "Your Google account is all you need. No new password."}</small>
+
 
           </section>
         </div>
@@ -1549,20 +1617,6 @@ export default function App() {
             <Palette size={18} /> Appearance
           </button>
         </nav>
-        <div className="sidebar-bottom">
-          <span className="status-dot" />
-          {authUser
-            ? "Study sessions sync to Supabase"
-            : supabase
-              ? "Local sessions"
-              : "Local-only mode"}
-          <small>
-            {authUser
-              ? "Account settings sync across devices"
-              : cloudStatus ||
-                (supabase ? "Sign in to sync sessions" : "Supabase is not configured")}
-          </small>
-        </div>
       </aside>
       <main className="main">
         <header className="topbar">
@@ -1574,13 +1628,11 @@ export default function App() {
                   ? "Study Analytics"
                   : view === "appearance" ? "Appearance" : "To-do"}
             </h1>
-            <p>
-              {view === "timesheet"
-                ? "Schedule sessions, track your hours, and submit your week because your hours studying count too."
-                : view === "analytics"
+            {view !== "timesheet" && <p>
+              {view === "analytics"
                   ? "See where your study time goes."
                   : view === "appearance" ? "Choose your wallpaper, banner color, and saved appearances." : "Keep track of what you want to get done."}
-            </p>
+            </p>}
           </div>
           <div className="top-actions">
             {authUser ? (
@@ -1609,7 +1661,7 @@ export default function App() {
             )}
           </div>
         </header>
-        <div className="workspace-sync-status" role="status">{workspaceSync.status}</div>
+        {workspaceSync.status !== "Account data synced" && <div className="workspace-sync-status" role="status">{workspaceSync.status}</div>}
         {workspaceSync.error && <p className="error" role="alert">{workspaceSync.error} <button className="secondary small" onClick={workspaceSync.retry}>Retry sync</button></p>}
         {cloudError && <p className="error cloud-error" role="alert">{cloudError}</p>}
         {sessionsLoading && <p className="helper cloud-message" role="status">Loading your Supabase sessions…</p>}
@@ -1617,7 +1669,7 @@ export default function App() {
           <div><h2>{categoryRange === "day" ? "Your day at a glance" : "Your week at a glance"}</h2><p>{categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" }) : `${days[0].toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${days[6].toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`}</p></div>
                 <div className="category-chart-controls analytics-period-controls">
                   <div role="group" aria-label="Analytics period">
-                    {(["day", "week"] as const).map((range) => <button key={range} type="button" aria-pressed={categoryRange === range} className={categoryRange === range ? "primary small" : "secondary small"} onClick={() => { setCategoryRange(range); if (range === "day" && (categoryDay < iso(days[0]) || categoryDay > iso(days[6]))) setCategoryDay(iso(days[0])); }}>{range === "day" ? "Day" : "Week"}</button>)}
+                    {(["day", "week"] as const).map((range) => <button key={range} type="button" aria-pressed={categoryRange === range} className={categoryRange === range ? "primary small" : "secondary small"} onClick={() => { setCategoryRange(range); setGoalRepeat("none"); setCategoryGoalError(""); setCategoryGoalMessage(""); if (range === "day" && (categoryDay < iso(days[0]) || categoryDay > iso(days[6]))) setCategoryDay(iso(days[0])); }}>{range === "day" ? "Day" : "Week"}</button>)}
                   </div>
                   <button className="icon-button" aria-label={`Previous ${categoryRange}`} onClick={() => {
                     if (categoryRange === "week") moveWeek(-1);
@@ -1641,7 +1693,7 @@ export default function App() {
               <div className="panel-heading">
                 <div>
                   <h2>Weekly timesheet</h2>
-                  <p>Drafts are projected hours. Submit each block to confirm actual study time.</p>
+                  <p>Plan projected hours. Submit each block to confirm actual study time.</p>
                 </div>
                 <div className="week-nav">
                   <button
@@ -1879,15 +1931,12 @@ export default function App() {
               </div>
               <dl className="summary-list">
                 <div><dt>Projected hours</dt><dd>{formatHours(total)}</dd></div>
-                <div>
-                  <dt>Awaiting submission</dt>
-                  <dd>{formatHours(draftEntries.reduce((sum, entry) => sum + hours(entry), 0))}</dd>
-                </div>
+
                 <div>
                   <dt>Actual hours</dt>
                   <dd>{formatHours(weekEntries.filter((entry) => entry.status === "submitted").reduce((sum, entry) => sum + hours(entry), 0))}</dd>
                 </div>
-                <div><dt>Sessions</dt><dd>{weekEntries.length}</dd></div>
+
                 <div><dt>Weekly goal</dt><dd>{formatDuration(goal)}</dd></div>
                 <div className="summary-total"><dt>Submitted actual</dt><dd>{formatHours(studyMetrics(weekEntries).actual)}</dd></div>
               </dl>
@@ -1907,6 +1956,9 @@ export default function App() {
             return saved;
           }} />
         </div>
+        <div className="study-music-section" hidden={view !== "timesheet"}>
+          <StudyMusic key={authUser?.id || "local"} url={studyVideoUrl} onChange={setStudyVideoUrl} />
+        </div>
         {view === "analytics" && (
           <div className="analytics-grid day-analytics">
 
@@ -1915,10 +1967,20 @@ export default function App() {
                 <p>{categoryRange === "day" ? dateFrom(categoryDay).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : `${days[0].toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${days[6].toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`}</p></div>
               <div className="daily-goal-summary">
                 <GoalProgress key={`${categoryRange}:${categoryDay}`} compact label={categoryRange === "day" ? "Daily goal" : "Weekly goal"}
-                  target={categoryRange === "day" ? dailyGoals[categoryDay] || 0 : goal} actual={dailyHoursTotal} projected={periodMetrics.projected} max={categoryRange === "day" ? 24 : 200}
+                  target={categoryRange === "day" ? dailyGoalTarget : goal} actual={dailyHoursTotal} projected={periodMetrics.projected} max={categoryRange === "day" ? 24 : 200}
+                  onStopRepeat={categoryRange === "day" && dailyGoalRules.some((rule) => rule.start <= categoryDay && (!rule.until || rule.until >= categoryDay)) ? () => {
+                    const previous = localDay(categoryDay); previous.setDate(previous.getDate() - 1); const until = dateKey(previous);
+                    setDailyGoalRules((current) => current.map((rule) => ({ ...rule, until: rule.until && rule.until < until ? rule.until : until })));
+                  } : undefined}
+                  repeatDate={categoryRange === "day" ? categoryDay : undefined}
+                  onSaveRepeat={(value, mode, selectedDays, until) => {
+                    const days = mode === "daily" ? [0,1,2,3,4,5,6] : mode === "weekly" ? [localDay(categoryDay).getDay()] : selectedDays;
+                    setDailyGoalRules((current) => [...current, { id: crypto.randomUUID(), category: "daily", scope: "day", start: categoryDay, until, days, hours: value }]);
+                    setDailyGoals((current) => { const next = { ...current }; delete next[categoryDay]; return next; });
+                  }}
                   onSave={(value) => { if (categoryRange === "day") setDailyGoals((current) => ({ ...current, [categoryDay]: value })); else { setGoal(value); setGoalInput(String(value)); } }} />
               </div>
-              <div className="daily-goal-ring-area"><HoursGoalChart label={categoryRange === "day" ? "Daily progress" : "Weekly progress"} actual={dailyHoursTotal} projected={periodMetrics.projected} goal={categoryRange === "day" ? dailyGoals[categoryDay] || 0 : goal} color={chartColor} height={240} showCaption={false} /></div>
+              <div className="daily-goal-ring-area"><HoursGoalChart label={categoryRange === "day" ? "Daily progress" : "Weekly progress"} actual={dailyHoursTotal} projected={periodMetrics.projected} goal={categoryRange === "day" ? dailyGoalTarget : goal} color={chartColor} height={240} showCaption={false} /></div>
             </section>
             {categoryRange === "week" && <section className="panel progress-chart-panel">
               <div className="panel-heading"><div><h2>Study hours by day</h2><p>Daily totals compared with your weekly goal’s daily pace</p></div><ChartColumn size={20} /></div>
@@ -1941,18 +2003,27 @@ export default function App() {
           <form className="category-goal-add" onSubmit={(event) => {
             event.preventDefault(); const value = Number(newCategoryGoalHours);
             if (!newGoalCategory || !categories.includes(newGoalCategory)) { setCategoryGoalError("Choose a category."); return; }
-            if (currentCategoryGoals[newGoalCategory]) { setCategoryGoalError("This category already has a goal for this period."); return; }
+            if (currentCategoryGoals[newGoalCategory] && goalRepeat === "none") { setCategoryGoalError("This category already has a goal for this period."); return; }
             if (!Number.isFinite(value) || value <= 0 || value > (categoryRange === "day" ? 24 : 168)) { setCategoryGoalError("Enter a valid number of hours for this period."); return; }
-            setCategoryGoals((current) => ({ ...current, [categoryGoalPeriod]: { ...current[categoryGoalPeriod], [newGoalCategory]: value } }));
-            setNewGoalCategory(""); setNewCategoryGoalHours("1"); setCategoryGoalError("");
+            if (goalRepeat !== "none") {
+              const anchor = categoryRange === "day" ? categoryDay : iso(week);
+              const selectedDays = goalRepeat === "daily" ? [0, 1, 2, 3, 4, 5, 6] : goalRepeat === "weekly" ? [localDay(anchor).getDay()] : goalRepeatDays;
+              if (categoryRange === "day" && !selectedDays.length) { setCategoryGoalError("Choose at least one weekday."); return; }
+              if (goalRepeatUntil && goalRepeatUntil < anchor) { setCategoryGoalError("End date must be on or after the selected date."); return; }
+              setCategoryGoalRules((current) => [...current, { id: crypto.randomUUID(), category: newGoalCategory, hours: value, scope: categoryRange, start: anchor, until: goalRepeatUntil, days: selectedDays }]);
+              setCategoryGoals((current) => { const period = { ...current[categoryGoalPeriod] }; delete period[newGoalCategory]; return { ...current, [categoryGoalPeriod]: period }; });
+            } else setCategoryGoals((current) => ({ ...current, [categoryGoalPeriod]: { ...current[categoryGoalPeriod], [newGoalCategory]: value } }));
+            setNewGoalCategory(""); setNewCategoryGoalHours("1"); setCategoryGoalError(""); setGoalRepeat("none"); setCategoryGoalMessage("Category goal saved.");
           }}>
             <label>Category<select required value={newGoalCategory} onChange={(event) => setNewGoalCategory(event.target.value)}>
-              <option value="">Choose a category</option>{categories.filter((category) => !currentCategoryGoals[category]).map((category) => <option key={category}>{category}</option>)}
+              <option value="">Choose a category</option>{categories.filter((category) => !currentCategoryGoals[category] || category === newGoalCategory).map((category) => <option key={category}>{category}</option>)}
             </select></label>
             <label>Goal hours<input required type="number" min="0.25" max={categoryRange === "day" ? 24 : 168} step="0.25" value={newCategoryGoalHours} onChange={(event) => setNewCategoryGoalHours(event.target.value)} /></label>
-            <button className="primary small" type="submit"><Plus size={14} /> Add category goal</button>
+            <RepeatControls mode={goalRepeat} days={goalRepeatDays} until={goalRepeatUntil} onMode={setGoalRepeat} onDays={setGoalRepeatDays} onUntil={setGoalRepeatUntil} weeklyOnly={categoryRange === "week"} minDate={categoryRange === "day" ? categoryDay : iso(week)} />
+            <button className="primary small" type="submit"><Plus size={14} /> {goalRepeat === "none" ? "Add category goal" : "Save recurring goal"}</button>
           </form>
           {categoryGoalError && <p className="error" role="alert">{categoryGoalError}</p>}
+          {categoryGoalMessage && <p className="helper" role="status">{categoryGoalMessage}</p>}
           {!categoryEntries.length && !Object.keys(currentCategoryGoals).length && <p className="helper">Your categories will appear here when you log study time. You can also add a category goal above.</p>}
           <div className="category-goals-grid">{[...new Set([...categoryEntries.map((entry) => entry.course), ...Object.keys(currentCategoryGoals)])].map((category) => {
             const target = currentCategoryGoals[category] || 0;
@@ -1961,8 +2032,24 @@ export default function App() {
             return <div className="category-goal-card" key={`${categoryGoalPeriod}:${category}`}><GoalProgress horizontal periodTotal={periodMetrics.actual} chartMax={Math.max(1, ...Object.values(currentCategoryGoals), ...[...new Set(categoryEntries.map((entry) => entry.course))].map((name) => categoryEntries.filter((entry) => entry.course === name).reduce((sum, entry) => sum + hours(entry), 0)))} color={categoryColors[category] || COLORS[Math.max(0, categories.indexOf(category)) % COLORS.length]} label={category} target={target} actual={actual} projected={metrics.projected} max={categoryRange === "day" ? 24 : 168}
               onSave={(value) => setCategoryGoals((current) => ({ ...current, [categoryGoalPeriod]: { ...current[categoryGoalPeriod], [category]: value } }))} />
               {target > 0 && <button className="secondary small" type="button" aria-label={`Remove ${category} goal`} onClick={() => setCategoryGoals((current) => {
-                const updated = { ...current[categoryGoalPeriod] }; delete updated[category]; return { ...current, [categoryGoalPeriod]: updated };
-              })}>Remove goal</button>}
+                const updated = { ...current[categoryGoalPeriod], [category]: 0 }; return { ...current, [categoryGoalPeriod]: updated };
+              })}><Trash2 size={13} /> Delete goal for this {categoryRange}</button>}
+              {target > 0 && <div className="category-repeat-actions">
+                <button type="button" className="secondary small" onClick={() => {
+                  const next = localDay(categoryRange === "day" ? categoryDay : iso(week)); next.setDate(next.getDate() + (categoryRange === "day" ? 1 : 7));
+                  const nextKey = `${categoryRange}:${dateKey(next)}`;
+                  const existing = { ...recurringCategoryGoals(categoryGoalRules, categoryRange, dateKey(next)), ...categoryGoals[nextKey] };
+                  if (existing[category] > 0) { setCategoryGoalError(`This category already has a goal for the next ${categoryRange}.`); return; }
+                  setCategoryGoals((current) => ({ ...current, [nextKey]: { ...current[nextKey], [category]: target } }));
+                  setCategoryGoalError(""); setCategoryGoalMessage(`Goal copied to ${dateKey(next)}.`);
+                }}>Copy to next {categoryRange}</button>
+                <button type="button" className="secondary small" onClick={() => { setNewGoalCategory(category); setNewCategoryGoalHours(String(target)); setGoalRepeat(categoryRange === "week" ? "weekly" : "daily"); setGoalRepeatUntil(""); }}>Make recurring</button>
+                {categoryGoalRules.some((rule) => rule.scope === categoryRange && rule.category === category) && <button type="button" className="secondary small" onClick={() => setCategoryGoalRules((current) => current.map((rule) => {
+                  if (rule.scope !== categoryRange || rule.category !== category) return rule;
+                  const previous = localDay(categoryRange === "day" ? categoryDay : iso(week)); previous.setDate(previous.getDate() - 1);
+                  const until = dateKey(previous); return { ...rule, until: rule.until && rule.until < until ? rule.until : until };
+                }))}>Stop repeating</button>}
+              </div>}
             </div>;
           })}</div>
         </section>
@@ -2111,13 +2198,7 @@ export default function App() {
         </section>}
         <footer>
           Studyday
-          <span>
-            {authUser
-              ? "Study sessions, tasks, notes, and settings sync to your account"
-              : supabase
-                ? "Sign in to sync sessions"
-                : "Sessions saved in this browser · Supabase is not configured"}
-          </span>
+
         </footer>
       </main>
       {googleToken && calendarThemesOpen && <div className="modal-backdrop">
@@ -2309,6 +2390,11 @@ export default function App() {
                   />
                 </div>
               </div>
+              {!editingEntryId && <RepeatControls mode={entryRepeat} days={entryRepeatDays} until={entryRepeatUntil} onMode={setEntryRepeat} onDays={setEntryRepeatDays} onUntil={setEntryRepeatUntil} requiredEnd minDate={date} />}
+              {editingEntryId && <button className="secondary small" type="button" onClick={() => {
+                setEditingEntryId(null); setEntryRepeat("weekly"); const last = localDay(date); last.setDate(last.getDate() + 28); setEntryRepeatUntil(dateKey(last));
+              }}>Make recurring</button>}
+              {entryRepeat !== "none" && <p className="helper">Creates separate projected entries through the end date. Future copies stay projected even if you submit the first entry. Edit or delete each occurrence separately.</p>}
               <div className="field">
                 <label htmlFor="notes">Notes</label>
                 <textarea
@@ -2334,8 +2420,8 @@ export default function App() {
                     <Trash2 size={14} /> Delete
                   </button>
                 )}
-                <button className="secondary" type="submit" value="draft">Save as projected</button>
-                <button className="primary" type="submit" value="submit-hours"><Check size={14} /> Submit hours</button>
+                <button className="secondary" disabled={entrySaving} type="submit" value="draft">Save as projected</button>
+                <button className="primary" disabled={entrySaving} type="submit" value="submit-hours"><Check size={14} /> Submit hours</button>
                 </div>
               </div>
             </form>

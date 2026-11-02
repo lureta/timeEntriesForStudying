@@ -1,7 +1,7 @@
 export type AppearanceTheme = {
   id: string;
   name: string;
-  theme: "forest" | "ocean" | "berry" | "amber";
+  theme: "forest" | "ocean" | "berry" | "amber" | "lavender" | "rose" | "sage" | "midnight";
   wallpaper: string;
   bannerColor: string;
   tint: string;

@@ -11,9 +11,27 @@ npm run dev
 
 ## Calendar and submission
 
-Click any hour in the weekly calendar to create a study entry. New entries are drafts. **Submit hours** on a study block confirms its hours as actual. Use **Save & submit hours** in the entry editor, or **Submit all draft hours** in the weekly timesheet header for bulk submission. Drafts remain projected time. Analytics distinguishes your manually set goal, projected hours (draft plus submitted), and actual hours (submitted only); submitting does not shrink the projection. Submission status saves to Supabase for the signed-in user. It does not send hours to Workday. Entries can be edited or deleted; edits return a submitted entry to draft.
+Click an hour to create a study entry, or drag across a time range to create a projected block. Click a block to edit its category, optional session name, time, and notes. **Save as projected** keeps it planned; **Submit hours** in the editor records it as actual. **Submit all projected hours** at the bottom of the calendar submits the week's projected entries together.
 
-Manage categories to create, rename, delete, and choose a color for each category. Use **Appearance** to choose a wallpaper theme, upload a wallpaper, set its tint, and customize the sidebar color. These choices sync to your signed-in account, including saved uploaded wallpapers and banner colors.
+Analytics separates your goal, projected hours (projected plus submitted entries), and actual hours (submitted only). Submitting does not shrink the projection. Status saves to Supabase for the signed-in user; it does not send hours to Workday.
+
+### Recurring study sessions
+
+In the entry editor, choose **Every day**, **Every week**, or **Selected weekdays**. Select any combination, such as Monday/Friday, or use the **M/W/F** shortcut. Choose a **Repeat through** date; repeats can span up to one year. **Make recurring** in an existing entry opens the same repeat options.
+
+Repeats create separate saved entries with the same local start/end time, category, name, and notes. Matching entries are skipped. Later occurrences are always projected, even if you submit the initial occurrence. Edit, submit, or delete each occurrence independently; changing one does not change the series. This applies to Studyday sessions, not imported Google Calendar events.
+
+### Recurring daily goals
+
+Edit **Daily goal** to choose a one-day target or repeat it every day, weekly, or on selected weekdays. An end date is optional. Saving without a repeat changes only the selected day. **Stop repeating** ends repeats from the selected day while preserving earlier targets. Daily goal rules sync with your account through `user_settings`; no additional SQL is needed.
+
+### Recurring category goals
+
+In Analytics, choose Day or Week and add a category goal. Daily goals can repeat every day, weekly on the same weekday, or on selected weekdays. Weekly category goals can repeat every week. End dates are optional. Existing goals offer **Make recurring**, **Copy to next day** (or week), and **Stop repeating**.
+
+Editing a goal overrides that day's or week's target. **Delete goal for this day/week** removes only that period's target, leaving sessions and other occurrences intact. Stopping a recurring goal from the selected period preserves earlier targets. Recurring rules sync through the existing `user_settings` table; this feature needs no additional SQL migration.
+
+Manage categories to create, rename, delete, and choose a color for each category. Use **Appearance** to choose a wallpaper theme, upload a wallpaper, adjust its overlay, and customize the banner color. These choices sync to your signed-in account, including saved uploaded wallpapers and banner colors.
 
 ## Google Calendar setup
 
@@ -61,12 +79,15 @@ To verify an existing setup, sign in locally, create a uniquely named session, a
 
 When Supabase is configured, study sessions are saved in the authenticated user's `study_sessions` rows. Without Supabase configuration or while signed out, new cloud writes are unavailable; existing local sessions remain untouched in browser storage. Without Supabase, settings remain browser-local. Active focus timers, unsaved form drafts, and Google Calendar access tokens do not sync. Wait for “Account data synced” before leaving; failed saves show an error and retry control.
 
-## Before deploying this update
+## Database and verification
 
 1. Apply `supabase/migrations/20261101_session_status.sql` if the status column is not present.
 2. Apply `supabase/migrations/20261101_workspace_sync.sql`. It adds a new table and policy without recreating existing sessions or their policies.
-3. Open the new local build in two independent browser sessions and sign into the same account. Verify a submitted session, task completion/deletion, note, goal, category rename/color, saved color theme, uploaded wallpaper, and banner color. Changes should appear within 30 seconds or when returning to the other tab.
-4. Sign into a different account to verify isolation. Check Google Calendar separately after reconnecting; its OAuth token and active timer remain device-local.
-5. Confirm “Account data synced” and no sync errors before deploying. Local automated tests cover sync behavior with a simulated backend, not the live project's RLS or authenticated database access.
+3. Apply `supabase/migrations/20261101_session_name.sql` if the session_name column is missing.
+4. Open the new local build in two independent browser sessions and sign into the same account. Verify a submitted session, task completion/deletion, note, goal, category rename/color, saved color theme, uploaded wallpaper, and banner color. Changes should appear within 30 seconds or when returning to the other tab.
+5. Sign into a different account to verify isolation. Check Google Calendar separately after reconnecting; its OAuth token and active timer remain device-local.
+6. Confirm “Account data synced” and no sync errors before deploying. Local automated tests cover sync behavior with a simulated backend, not the live project's RLS or authenticated database access.
 
 Run sync checks with `node --experimental-strip-types --test tests/workspaceData.test.mjs tests/workspaceSync.test.mjs` (Node 22 or newer).
+
+Run all automated checks with `node --experimental-strip-types --test tests/*.test.mjs`, then `npm run build`. Recurrence tests cover weekday schedules, end dates, daylight-saving boundaries, and category-rule matching. Live account sync still needs verification with two signed-in browsers.
