@@ -1,13 +1,6 @@
 # Studyday
 
-Studyday is a weekly study calendar with click-to-add time slots, a focus timer, course analytics, and optional Google Calendar integration.
-
-## Run locally
-
-```bash
-npm install
-npm run dev
-```
+Studyday is a study calendar with click-to-add time slots, a focus timer, course analytics, and optional Google Calendar integration.
 
 ## Calendar and submission
 
