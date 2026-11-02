@@ -27,7 +27,10 @@ export function useWorkspaceSync<T extends Workspace>(userId: string | undefined
     let active = true;
     writing.current = false;
     setLoadedUser(null); setError(""); baseline.current = {};
-    if (!client || !userId) { setStatus("Saved on this device"); return; }
+    if (!client) { setStatus("Saved on this device"); return; }
+    // Clear the previous account's appearance and settings before restoring another account.
+    applyRef.current({ ...defaultsRef.current });
+    if (!userId) { setStatus("Sign in to sync settings"); return; }
     setStatus("Loading account data…");
     const load = async () => {
       try {

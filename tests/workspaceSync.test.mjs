@@ -32,7 +32,7 @@ test('workspace sync hydrates before writing, isolates accounts, refreshes, and 
       }
     },
   };
-  const server = new Map([['a', { goal: 40, note: 'cloud' }], ['b', { goal: 60, note: 'other account' }]]);
+  const server = new Map([['a', { goal: 40, note: 'cloud', theme: 'rose', wallpaper: 'private-wallpaper', savedAppearances: [{id:'a-theme'}] }], ['b', { goal: 60, note: 'other account' }]]);
   let writes = [], failWrite = false;
   globalThis.__syncClient = { from: () => ({
     select: () => ({ eq: async (_column, user) => ({ data: Object.entries(server.get(user) || {}).map(([key, value]) => ({ key, value })), error: null }) }),
@@ -48,8 +48,8 @@ test('workspace sync hydrates before writing, isolates accounts, refreshes, and 
     .replace(/import .* from "..\/services\/supabase";/, 'const supabase = globalThis.__syncClient;')
     .replace('"../services/workspaceData"', JSON.stringify(moduleUrl(compile('src/services/workspaceData.ts'))));
   const { useWorkspaceSync } = await import(moduleUrl(source));
-  let user = 'a', snapshot = { goal: 10, note: 'local' }, result;
-  const defaults = { goal: 20, note: '' };
+  let user = 'a', snapshot = { goal: 10, note: 'local', theme: 'forest', wallpaper: '', savedAppearances: [] }, result;
+  const defaults = { goal: 20, note: '', theme: 'forest', wallpaper: '', savedAppearances: [] };
   const render = () => {
     rerender = false; cursor = 0; effects = [];
     result = useWorkspaceSync(user, snapshot, defaults, (next) => { snapshot = next; rerender = true; }, async () => ({}));
@@ -74,6 +74,16 @@ test('workspace sync hydrates before writing, isolates accounts, refreshes, and 
   assert.equal(server.get('a').note, 'retry me'); assert.equal(result.error, '');
   user = 'b'; rerender = true; await settle(); await flushSave();
   assert.equal(snapshot.note, 'other account'); assert.equal(snapshot.goal, 60);
+  assert.equal(snapshot.theme, 'forest'); assert.equal(snapshot.wallpaper, '');
+  assert.deepEqual(snapshot.savedAppearances, [], 'another account must not inherit saved wallpapers');
+  user = 'new-account'; rerender = true; await settle(); await flushSave();
+  assert.equal(snapshot.theme, 'forest'); assert.equal(snapshot.wallpaper, '');
+  assert.deepEqual(snapshot.savedAppearances, []);
+  user = 'a'; rerender = true; await settle(); await flushSave();
+  assert.equal(snapshot.theme, 'rose'); assert.equal(snapshot.wallpaper, 'private-wallpaper');
+  user = undefined; rerender = true; await settle();
+  assert.equal(snapshot.theme, 'forest'); assert.equal(snapshot.wallpaper, '');
+  assert.deepEqual(snapshot.savedAppearances, [], 'signing out clears private appearance from the screen');
   assert.equal(server.get('a').note, 'retry me', 'switching accounts must not write the previous account into the next');
   for (const slot of slots) slot?.cleanup?.();
 });
