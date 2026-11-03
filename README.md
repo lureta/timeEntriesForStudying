@@ -1,312 +1,569 @@
+
 # Studyday
 
-Studyday is a spin on Workday. Instead of tracking your work hours, you track your study hours.
+### Workday, but for studying.
 
-Just like employees clock in their hours at work, students can log their time studying, preparing for interviews, working on personal projects, etc.
+**Studyday** is a spin on Workday. Instead of tracking your work hours, you track your study hours.
+
+Just like employees submit timesheets at work, students can log time spent studying, preparing for technical interviews, completing coursework, and building personal projects.
 
 Plan your hours, submit your timesheet, and see where your time actually goes.
 
+### [🚀 Try Studyday — Live Website](https://lureta.github.io/timeEntriesForStudying/)
+
+[Live Demo](https://lureta.github.io/timeEntriesForStudying/) | [Source Code](https://github.com/lureta/timeEntriesForStudying)
+
+---
+
+## Overview
+
+Studyday is a full-stack productivity web application that brings workplace-style time tracking to academic life.
+
+Instead of simply starting and stopping a timer, students can plan their schedules, log completed study hours, submit weekly timesheets, and analyze their productivity.
+
+The application combines **interactive scheduling, recurring sessions, goal tracking, Google Calendar integration, cloud synchronization, and productivity analytics** in one customizable workspace.
+
+### What makes Studyday different?
+
+- **Workday-inspired timesheets:** Treat study sessions like work hours, with projected and submitted entries.
+- **Planned vs. actual tracking:** Compare the time you intended to study against the time you completed.
+- **Google Calendar integration:** View existing commitments alongside your study schedule.
+- **Personalized analytics:** Track productivity by category, day, week, and goal.
+- **Cloud synchronization:** Access study data and preferences across devices.
+- **Recurring schedules:** Automate repeating study sessions and goals.
+
+---
+
 ## Tech Stack
-Frontend: React, TypeScript, Vite
 
-Backend / Database: Supabase, PostgreSQL
+| Category | Technologies |
+|---|---|
+| **Frontend** | React, TypeScript, Vite |
+| **Backend & Database** | Supabase, PostgreSQL |
+| **Authentication** | Supabase Auth, Google OAuth 2.0 |
+| **External APIs** | Google Calendar API |
+| **Cloud Hosting** | GitHub Pages |
+| **CI/CD** | GitHub Actions |
+| **Testing** | Node.js Test Runner |
 
-Authentication: Supabase Auth, Google OAuth 2.0
-
-External APIs: Google Calendar API
-
-Cloud Hosting: GitHub Pages
-
-CI/CD: GitHub Actions
+---
 
 ## Features
 
-Timesheet Management
+### 1. Interactive Calendar & Timesheets
 
-Create and manage study sessions through an interactive weekly calendar.
+Studyday uses a weekly calendar to help students plan and record their study hours.
 
-Schedule projected study hours by selecting or dragging across time blocks.
+- **Create sessions:** Click an hour or drag across a time range to schedule study blocks.
+- **Projected hours:** Save sessions as planned study time.
+- **Actual hours:** Submit completed sessions to record actual study time.
+- **Weekly submission:** Submit all projected sessions for the week at once.
+- **Session management:** Edit categories, names, times, and notes.
+- **Custom categories:** Organize sessions by coursework, LeetCode, personal projects, or other activities.
 
-Submit completed sessions individually or submit an entire week's timesheet.
+Submitting a session updates actual hours while preserving its contribution to projected hours.
 
-Categorize study sessions by coursework, interview preparation, personal projects, or custom activities.
+This allows students to compare their original schedule against completed work.
 
-Edit session details, including time, category, name, and notes.
+### 2. Google Calendar Integration
 
-Track projected hours separately from actual completed hours.
+Studyday connects to Google Calendar through **OAuth 2.0** and the **Google Calendar API**.
 
-Google Calendar Integration
+- Display events from multiple Google calendars.
+- View existing commitments alongside Studyday sessions.
+- Display all-day events and events from the selected week.
+- Edit event titles and start/end times when authorized.
+- Modify individual occurrences of recurring Google Calendar events.
+- Keep Google Calendar authorization separate from Studyday authentication.
 
-Connect Google Calendar using OAuth 2.0.
+Calendar access is optional, so students can use Studyday without connecting Google Calendar.
 
-Display events from multiple Google calendars alongside study sessions.
+### 3. Productivity Analytics
 
-View existing commitments to better plan available study time.
+The analytics dashboard provides insights into how students allocate their study time.
 
-Edit Google Calendar event titles and times directly from Studyday when authorized.
+- Compare **projected hours, actual hours, and study goals**.
+- Track daily and weekly productivity.
+- View completed study time by category.
+- Create personalized goals with custom hour and minute targets.
+- Set category-specific targets.
+- Track multiple goals with different category filters.
+- Visualize progress toward selected goals.
 
-Support individual occurrences of recurring Google Calendar events.
+Sessions can contribute to multiple goals without being double-counted in overall study totals.
 
-Productivity Analytics
+### 4. Recurring Study Sessions
 
-Track daily and weekly study hours.
+Students can automate repetitive schedules instead of manually creating each session.
 
-Compare projected hours against actual completed hours.
+Supported recurrence options include:
 
-Set personalized study goals with custom hour targets.
+- Every day
+- Every week
+- Selected weekdays
+- Custom recurrence end dates, up to one year
 
-Create category-specific goals for different activities.
+Recurring sessions are generated as individual records.
 
-Visualize how study time is distributed across categories.
+This allows students to edit, submit, or delete one occurrence without affecting other sessions.
 
-Track progress toward multiple goals without double-counting sessions.
+The scheduling logic also prevents duplicate entries and accounts for daylight-saving time boundaries.
 
-Recurring Schedules and Goals
+### 5. Recurring Goals
 
-Schedule repeating study sessions daily, weekly, or on selected weekdays.
+Studyday supports recurring productivity goals at multiple levels.
 
-Create recurring daily, weekly, and category-specific goals.
+**Daily goals**
+- Set one-day targets or recurring daily goals.
+- Repeat goals weekly or on selected weekdays.
+- Stop future recurrence while preserving previous goals.
+
+**Category goals**
+- Create daily or weekly targets for specific categories.
+- Repeat goals on selected schedules.
+- Override individual occurrences without deleting the recurring rule.
+- Copy targets to another day or week.
 
-Configure recurrence end dates.
+**Additional goals**
+- Create multiple named goals.
+- Select which categories contribute to each goal.
+- Track actual and projected progress independently.
+- Switch between goals in the analytics dashboard.
 
-Edit or delete individual study sessions without modifying other occurrences.
+Goals and recurrence settings are persisted through Supabase.
 
-Prevent duplicate sessions when generating recurring schedules.
+### 6. Cloud Synchronization & User Accounts
 
-Cloud Synchronization
+Studyday uses **Supabase Auth** and **PostgreSQL** to support persistent, account-specific data.
 
-Sign in securely with Google using Supabase Authentication.
+- Authenticate using Google.
+- Store study sessions in PostgreSQL.
+- Synchronize goals, categories, tasks, notes, and appearance preferences.
+- Access saved data across devices.
+- Refresh sessions every 30 seconds while the application is visible.
+- Refresh when returning to the application or reconnecting.
+- Use Row Level Security to restrict database access to the authenticated user.
 
-Persist study sessions and account settings in PostgreSQL.
+Settings are synchronized independently to reduce conflicts between unrelated changes.
 
-Access saved study data across devices.
+### 7. Workspace Customization
 
-Synchronize goals, categories, tasks, notes, and appearance preferences.
+Students can personalize their Studyday workspace.
 
-Use PostgreSQL Row Level Security (RLS) to restrict users to their own data.
-
-Refresh sessions periodically and when returning to the application.
-
-Workspace Customization
-
-Create and manage custom study categories.
-
-Assign colors to activities for easier calendar visualization.
-
-Manage personal notes and tasks.
-
-Customize themes, wallpapers, and workspace appearance.
-
-Save preferences to the authenticated account.
-
-System Architecture
-
-Studyday is a React single-page application that integrates Supabase for authentication and persistent storage and the Google Calendar API for external calendar functionality.
-
-                   User
-                     |
-                     v
-             React + TypeScript
-                Vite Frontend
-                     |
-          +----------+-----------+
-          |                      |
-          v                      v
-    Supabase Client        Google Calendar API
-          |                      ^
-          |                      |
-          v                Google OAuth 2.0
-     Supabase Auth
-          |
-          v
-      PostgreSQL
-          |
-    +-----+----------+
-    |                |
-    v                v
-study_sessions   user_settings
-    |                |
-    +-------+--------+
-            |
-            v
-     Row Level Security
-
-Deployment:
-GitHub -> GitHub Actions -> GitHub Pages
-
-Architecture Overview
-
-Frontend: React and TypeScript power the interactive calendar, study session management, productivity dashboards, and workspace settings. Vite handles development and production builds.
-
-Authentication: Supabase Auth manages user sign-in and authenticated application sessions. Google Calendar uses a separate OAuth authorization flow to request calendar permissions.
-
-Database: Supabase PostgreSQL stores study sessions and account-specific settings. Row Level Security ensures users can only access their own records.
-
-External API: The Google Calendar API retrieves events for the selected week and supports authorized event updates.
-
-Synchronization: Session data is refreshed every 30 seconds while the application is visible, as well as when users return to the application or reconnect. Settings are saved independently to reduce unrelated update conflicts.
-
-Deployment: GitHub Actions automatically builds and deploys the application to GitHub Pages when changes are pushed to the main branch.
-
-Engineering Highlights
-
-Projected vs. Actual Time Tracking
-
-Implemented a timesheet submission system that distinguishes between planned and completed study hours.
-
-Study sessions can remain projected or be submitted as actual hours. Submitting a session updates completed-time analytics without removing those hours from the original projection.
-
-This allows students to compare their planned workload against actual study activity.
-
-Cross-Device Data Synchronization
-
-Integrated Supabase PostgreSQL to persist study sessions and account preferences across devices.
-
-Account settings are stored independently using JSONB key-value records, allowing updates to different settings without overwriting unrelated data.
-
-The synchronization system includes periodic refreshes, reconnect handling, save-error feedback, and last-successful-save behavior for concurrent updates to the same setting.
-
-Authentication and Data Security
-
-Implemented Google sign-in through Supabase Auth with PostgreSQL Row Level Security policies for account-level data isolation.
-
-Separated application authentication from Google Calendar authorization, allowing users to access Studyday without granting calendar permissions.
-
-Google Calendar access tokens remain in browser memory rather than being persisted in the application database.
-
-Recurring Scheduling Logic
-
-Developed recurrence functionality supporting daily, weekly, and selected-weekday schedules with configurable end dates.
-
-Recurring sessions are generated as individual records, allowing independent edits and submissions.
-
-The recurrence logic also handles duplicate prevention and daylight-saving time boundaries.
-
-Automated Testing and Deployment
-
-Added automated tests for recurring schedules, category goal matching, synchronization logic, and daylight-saving time behavior.
-
-Configured GitHub Actions to automate production builds and deployment to GitHub Pages.
-
-Database Design
+- Create, rename, and delete study categories.
+- Assign custom category colors.
+- Manage personal notes and tasks.
+- Select wallpaper themes or upload custom backgrounds.
+- Adjust wallpaper overlays and banner colors.
+- Synchronize preferences across signed-in devices.
+
+---
+
+## System Architecture
+
+Studyday is a **React single-page application** with a Supabase backend and an external Google Calendar integration.
+
+```text
+                        User
+                          |
+                          v
+                  React + TypeScript
+                     Vite Frontend
+                          |
+              +-----------+-----------+
+              |                       |
+              v                       v
+        Supabase Client        Google Calendar API
+              |                       ^
+              |                       |
+              v                 Google OAuth 2.0
+         Supabase Auth
+              |
+              v
+          PostgreSQL
+              |
+        +-----+----------+
+        |                |
+        v                v
+  study_sessions    user_settings
+        |                |
+        +-------+--------+
+                |
+                v
+        Row Level Security
+
+
+Deployment Pipeline:
+
+GitHub Repository
+       |
+       v
+  GitHub Actions
+       |
+       v
+   Vite Build
+       |
+       v
+   GitHub Pages
+```
+
+### Architecture Components
+
+| Component | Responsibility |
+|---|---|
+| **React Frontend** | Calendar UI, timesheet management, analytics, and workspace customization |
+| **Supabase Auth** | Google sign-in and authenticated user sessions |
+| **PostgreSQL** | Persistent storage for study sessions and user settings |
+| **Row Level Security** | Account-level database access control |
+| **Google Calendar API** | External calendar event retrieval and authorized editing |
+| **GitHub Actions** | Automated production builds and deployment |
+| **GitHub Pages** | Static frontend hosting |
+
+---
+
+## Technical Implementation
+
+### Timesheet State Management
+
+Studyday distinguishes between **projected** and **submitted** sessions.
+
+Projected hours represent the full scheduled workload, including sessions that have already been submitted.
+
+Actual hours represent only submitted sessions.
+
+This separation allows the analytics dashboard to compare planned and completed study time without losing the original projection.
+
+Editing a submitted session returns it to draft status.
+
+### Authentication & Authorization
+
+Studyday uses two separate Google authorization flows.
+
+**Supabase Authentication**
+- Identifies users and manages application sessions.
+- Enables account-specific cloud storage.
+- Works with PostgreSQL Row Level Security policies.
+
+**Google Calendar OAuth**
+- Requests permission to read and edit calendar events.
+- Operates independently from Supabase sign-in.
+- Stores access tokens in browser memory rather than the application database.
+
+This separation allows the core application to function without Google Calendar permissions.
+
+### Database Design
 
 Studyday uses two primary PostgreSQL tables.
 
-Table
+| Table | Description |
+|---|---|
+| `study_sessions` | Stores study session data, including time, category, name, and submission status |
+| `user_settings` | Stores account-specific settings using JSONB key-value records |
 
-Purpose
+The `user_settings` table stores data such as:
 
-study_sessions
+- Productivity goals and recurrence rules
+- Categories and category colors
+- Tasks and notes
+- Timer preferences
+- Event color overrides
+- Appearance settings and saved wallpapers
 
-Stores study sessions, timestamps, categories, names, and submission status
+**Security:** PostgreSQL Row Level Security policies restrict access to each authenticated user's data.
 
-user_settings
+Database schema and migrations are maintained in [`supabase/`](supabase/).
 
-Stores account-specific goals, categories, tasks, notes, and workspace preferences using JSONB
+### Cross-Device Synchronization
 
-Both use account-scoped access controls through PostgreSQL Row Level Security.
+Studyday uses Supabase as its persistent data store.
 
-Database migrations are maintained in supabase/migrations/.
+When signed in:
 
-Getting Started
+1. Study sessions and account settings are loaded from Supabase.
+2. Changes are saved to the appropriate database records.
+3. Sessions refresh every 30 seconds while the application is visible.
+4. Data refreshes when users return to the app or reconnect.
+5. Save failures display an error and retry option.
 
-Prerequisites
+Settings are stored independently, so changing a note does not overwrite an unrelated goal.
 
-Node.js 22+
+Simultaneous changes to the same setting use the last successful save.
 
-npm
+### Recurrence Logic
 
-Supabase project
+Recurring sessions are generated as separate study session records rather than being stored as one continuously repeating event.
 
-Google Cloud project (for Google Calendar integration)
+The recurrence system supports:
 
-Installation
+- Weekday selection
+- Recurrence end dates
+- Duplicate prevention
+- Independent occurrence editing
+- Daylight-saving time boundaries
 
-1. Clone the repository
+Recurring goals use stored rules and period-specific overrides to support flexible scheduling.
 
+---
+
+## Engineering Highlights
+
+### Full-Stack Application Development
+
+Built a React and TypeScript frontend integrated with Supabase PostgreSQL for persistent user data.
+
+The application combines interactive scheduling, state management, authentication, database operations, and analytics.
+
+### Third-Party API Integration
+
+Integrated the Google Calendar API using OAuth 2.0 authorization.
+
+The application retrieves external events and supports authorized updates while keeping calendar permissions separate from application authentication.
+
+### Secure Multi-User Data Storage
+
+Implemented account-scoped data persistence using PostgreSQL Row Level Security.
+
+User sessions, goals, and workspace preferences are associated with authenticated accounts.
+
+### Synchronization & Data Consistency
+
+Implemented periodic cloud synchronization, reconnect handling, independently persisted settings, and save-error feedback.
+
+The design reduces conflicts between unrelated settings while preserving local drafts and active timers.
+
+### Scheduling Algorithms & Edge Cases
+
+Implemented recurring sessions and goals with weekday selection, end dates, duplicate prevention, and daylight-saving time handling.
+
+### CI/CD & Automated Testing
+
+Configured GitHub Actions for automated deployment and added tests for scheduling and synchronization logic.
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 22 or newer
+- npm
+- Supabase project
+- Google Cloud project (optional, for Calendar integration)
+
+### 1. Clone the Repository
+
+```bash
 git clone https://github.com/lureta/timeEntriesForStudying.git
 cd timeEntriesForStudying
+```
 
-2. Install dependencies
+### 2. Install Dependencies
 
+```bash
 npm install
+```
 
-3. Configure environment variables
+### 3. Configure Environment Variables
 
-Create a local environment file:
+Copy the example environment file:
 
+```bash
 cp .env.example .env.local
+```
 
 Add your credentials:
 
+```env
 VITE_SUPABASE_URL=
 VITE_SUPABASE_PUBLISHABLE_KEY=
 VITE_GOOGLE_CLIENT_ID=
+```
 
-The Google Calendar client ID is only required if enabling Calendar integration.
+`VITE_GOOGLE_CLIENT_ID` is only required for Google Calendar integration.
 
-4. Set up Supabase
+> **Security:** Never expose a Supabase service-role key in frontend environment variables.
 
-Run supabase/schema.sql in the Supabase SQL Editor for a new project.
+### 4. Configure Supabase
 
-Apply the relevant migrations in supabase/migrations/ for session status, session names, and workspace synchronization.
+1. Create a project in [Supabase](https://supabase.com/).
+2. Run [`supabase/schema.sql`](supabase/schema.sql) in the SQL Editor for a new project.
+3. Apply the relevant migrations in [`supabase/migrations/`](supabase/migrations/).
+4. Enable Google under **Authentication → Providers**.
+5. Configure the OAuth client and authorized redirect URLs.
 
-Enable Google authentication in Supabase and configure the appropriate OAuth redirect URLs.
+For existing projects, apply the relevant migrations:
 
-5. Start the development server
+```text
+supabase/migrations/
+├── 20261101_session_status.sql
+├── 20261101_workspace_sync.sql
+└── 20261101_session_name.sql
+```
 
+### 5. Start the Development Server
+
+```bash
 npm run dev
+```
 
-Open http://localhost:5173 in your browser.
+Open `http://localhost:5173`.
 
-Testing
+---
 
-Run the automated test suite:
+## Google Calendar Setup
 
+1. Open the [Google Cloud Console](https://console.cloud.google.com/).
+2. Create or select a Google Cloud project.
+3. Enable the **Google Calendar API**.
+4. Configure the OAuth consent screen.
+5. Create an OAuth client ID of type **Web application**.
+6. Add `http://localhost:5173` to **Authorized JavaScript origins**.
+7. Add your OAuth client ID to `.env.local` as `VITE_GOOGLE_CLIENT_ID`.
+8. Restart the development server.
+9. Select **Connect Google Calendar** in Studyday.
+
+The application requests the following OAuth scopes:
+
+- `calendar.readonly`
+- `calendar.events`
+
+Only calendars with appropriate edit permissions can be modified.
+
+> **Note:** Google Calendar access tokens are kept in memory. Reconnection is required after refreshing the application.
+
+---
+
+## Testing
+
+Studyday includes automated tests for recurrence rules and synchronization behavior.
+
+### Run All Tests
+
+```bash
 node --experimental-strip-types --test tests/*.test.mjs
+```
 
-Create a production build:
+### Run Synchronization Tests
 
+```bash
+node --experimental-strip-types --test tests/workspaceData.test.mjs tests/workspaceSync.test.mjs
+```
+
+### Production Build
+
+```bash
 npm run build
+```
 
-Automated tests cover recurrence logic and simulated synchronization behavior. Live authentication, Row Level Security, and cross-device synchronization should also be verified against a configured Supabase project.
+### Test Coverage Areas
 
-Deployment
+- Recurring weekday schedules
+- Recurrence end dates
+- Daylight-saving time boundaries
+- Category goal matching
+- Workspace data handling
+- Synchronization behavior with a simulated backend
 
-Studyday is hosted on GitHub Pages and deployed automatically using GitHub Actions.
+> **Note:** Automated synchronization tests use a simulated backend. Live database access, RLS, and cross-device behavior require separate verification against Supabase.
 
-The deployment workflow:
+---
 
-Triggers when changes are pushed to main.
+## Deployment
 
-Installs dependencies and builds the Vite application.
+### GitHub Pages
 
-Publishes the production build to GitHub Pages.
+Studyday is deployed through GitHub Pages using GitHub Actions.
+
+**Deployment workflow:**
+
+1. Push changes to `main`.
+2. GitHub Actions runs the deployment workflow.
+3. Vite builds the production application.
+4. GitHub Pages publishes the generated assets.
+
+The workflow is defined in:
+
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
+
+### Production Environment Variables
+
+Configure the following GitHub Actions secrets:
+
+```env
+VITE_SUPABASE_URL=
+VITE_SUPABASE_PUBLISHABLE_KEY=
+VITE_GOOGLE_CLIENT_ID=
+```
+
+For Google Calendar integration, add the deployed origin to the Google OAuth client's authorized JavaScript origins:
+
+```text
+https://lureta.github.io
+```
+
+For Supabase Auth, configure the deployed redirect URL:
+
+```text
+https://lureta.github.io/timeEntriesForStudying/
+```
+
+### Alternative: AWS Amplify
 
 The application can also be deployed through AWS Amplify Hosting.
 
-Current Limitations
+1. Connect the GitHub repository to AWS Amplify.
+2. Select the `main` branch.
+3. Configure the build command as `npm run build`.
+4. Set the output directory to `dist`.
+5. Configure the required environment variables.
+6. Add the Amplify domain to the Google OAuth authorized origins.
 
-Cross-device updates use periodic refreshes rather than real-time database subscriptions.
+---
 
-Active timers, unsaved drafts, and Google Calendar access tokens remain device-local.
+## Data Persistence & Limitations
 
-Google Calendar requires separate authorization and reconnection after refreshing.
+Studyday uses cloud persistence for authenticated users while retaining some device-local state.
 
-Concurrent changes to the same settings record use the last successful save.
+| Data | Storage |
+|---|---|
+| Study sessions | Supabase PostgreSQL |
+| Submission status | Supabase PostgreSQL |
+| Goals and recurrence rules | Supabase `user_settings` |
+| Categories and colors | Supabase `user_settings` |
+| Tasks and notes | Supabase `user_settings` |
+| Appearance preferences | Supabase `user_settings` |
+| Active timers | Device memory |
+| Unsaved drafts | Device memory |
+| Google Calendar access tokens | Device memory |
+| Legacy local sessions | Browser storage |
 
-Legacy browser-local study sessions are not automatically migrated to Supabase.
+### Current Limitations
 
-Future Improvements
+- Cross-device synchronization uses periodic refreshes rather than real-time database subscriptions.
+- Active timers and unsaved drafts do not synchronize across devices.
+- Google Calendar authorization must be reconnected after refreshing.
+- Concurrent changes to the same setting use last-successful-save behavior.
+- Legacy browser-local sessions are not automatically imported into Supabase.
+- New cloud session writes require an authenticated Supabase account.
 
-Real-time synchronization using Supabase Realtime.
+---
 
-Expanded productivity analytics and long-term study trends.
+## Future Improvements
 
-Improved offline support and synchronization conflict resolution.
+- [ ] Add real-time synchronization with Supabase Realtime.
+- [ ] Expand long-term productivity analytics and trends.
+- [ ] Add study streaks and achievement tracking.
+- [ ] Improve offline support and conflict resolution.
+- [ ] Expand integration testing for live authentication and database access.
+- [ ] Add more detailed productivity reports.
 
-Additional integration tests for authentication and database access.
+---
 
-Study streaks and more detailed progress reporting.
+## Project Links
 
-Studyday — Plan your hours. Submit your timesheet. Track your progress.rgets remain attached to the original default daily/weekly goal.
+- **Live Application:** [Studyday](https://lureta.github.io/timeEntriesForStudying/)
+- **Source Code:** [GitHub Repository](https://github.com/lureta/timeEntriesForStudying)
+
+---
+
+**Studyday — Plan your hours. Submit your timesheet. Track your progress.**
