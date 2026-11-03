@@ -3,7 +3,7 @@
 
 **Studyday** is a spin on Workday. Instead of tracking your work hours, you track your study hours.
 
-Just like employees submit timesheets at work, students can log time spent studying, preparing for technical interviews, completing coursework, and building personal projects.
+Just like employees submit timesheets at work, students can log time spent studying, preparing for technical interviews, completing coursework, or building personal projects.
 
 Plan your hours, submit your timesheet, and see where your time actually goes.
 
