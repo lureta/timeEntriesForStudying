@@ -335,6 +335,7 @@ Implemented recurring sessions and goals with weekday selection, end dates, dupl
 
 Configured GitHub Actions for automated deployment and added tests for scheduling and synchronization logic.
 
+---
 
 ## Future Improvements
 
