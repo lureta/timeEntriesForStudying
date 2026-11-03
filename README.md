@@ -9,9 +9,7 @@ Just like employees submit timesheets at work, students can log time spent study
 
 Plan your hours, submit your timesheet, and see where your time actually goes.
 
-### [🚀 Try Studyday — Live Website](https://lureta.github.io/timeEntriesForStudying/)
-
-[Live Demo](https://lureta.github.io/timeEntriesForStudying/) | [Source Code](https://github.com/lureta/timeEntriesForStudying)
+### [Deployed Site — Live Website](https://lureta.github.io/timeEntriesForStudying/)
 
 ---
 
