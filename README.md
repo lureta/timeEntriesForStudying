@@ -349,7 +349,3 @@ Configured GitHub Actions for automated deployment and added tests for schedulin
 
 - **Live Application:** [Studyday](https://lureta.github.io/timeEntriesForStudying/)
 - **Source Code:** [GitHub Repository](https://github.com/lureta/timeEntriesForStudying)
-
----
-
-*Studyday - Plan your hours. Submit your timesheet. Track your progress.*
