@@ -338,10 +338,10 @@ Configured GitHub Actions for automated deployment and added tests for schedulin
 
 ## Future Improvements
 
-- [ ] **AI-Powered Study Planner:** Automatically generate personalized study schedules based on deadlines, priorities, available time, and historical productivity.
-- [ ] **ELMS Integration:** Connect to ELMS (Canvas) to automatically import course schedules, assignments, quizzes, exams, and deadlines, allowing students to plan study sessions around their academic workload.
-- [ ] **Advanced Productivity Analytics:** Build interactive dashboards with study trends, productivity predictions, weekly reports, and personalized recommendations.
-- [ ] **Collaborative Study Workspaces:** Allow students to create study groups, schedule shared sessions, set team goals, and track progress with friends in real time.
+- **AI-Powered Study Planner:** Automatically generate personalized study schedules based on deadlines, priorities, available time, and historical productivity.
+- **ELMS Integration:** Connect to ELMS (Canvas) to automatically import course schedules, assignments, quizzes, exams, and deadlines, allowing students to plan study sessions around their academic workload.
+- **Advanced Productivity Analytics:** Build interactive dashboards with study trends, productivity predictions, weekly reports, and personalized recommendations.
+- **Collaborative Study Workspaces:** Allow students to create study groups, schedule shared sessions, set team goals, and track progress with friends in real time.
 
 ---
 
